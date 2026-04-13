@@ -1,19 +1,26 @@
 from datetime import datetime
+from pathlib import Path
 
 import win32gui
 from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
+    QMenu,
     QPushButton,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
 
 from account_storage import AccountStorage
 from riot_ui_login import RiotUIError, login
+
+_ICON_PATH = str(Path(__file__).parent.parent / "icon.ico")
 
 
 def _format_last_used(iso: str) -> str:
@@ -40,6 +47,7 @@ class AccountManagerWindow(QWidget):
         self.accounts = self.storage.load_accounts()
         self._build_ui()
         self._refresh_account_list()
+        self._start_tray()
         self._start_riot_client_watcher()
 
     # ------------------------------------------------------------------
@@ -121,6 +129,46 @@ class AccountManagerWindow(QWidget):
         self.setMinimumSize(560, 360)
 
     # ------------------------------------------------------------------
+    # System tray
+    # ------------------------------------------------------------------
+
+    def _start_tray(self) -> None:
+        self._tray = QSystemTrayIcon(QIcon(_ICON_PATH), self)
+        self._tray.setToolTip("AccountManager")
+
+        menu = QMenu()
+        show_action = menu.addAction("Show")
+        menu.addSeparator()
+        quit_action = menu.addAction("Quit")
+
+        show_action.triggered.connect(self._show_window)
+        quit_action.triggered.connect(QApplication.quit)
+
+        self._tray.setContextMenu(menu)
+        self._tray.activated.connect(self._on_tray_activated)
+        self._tray.show()
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:  # single click
+            self._show_window()
+
+    def _show_window(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def closeEvent(self, event) -> None:
+        """Minimize to tray instead of quitting."""
+        event.ignore()
+        self.hide()
+        self._tray.showMessage(
+            "AccountManager",
+            "Running in the background. Click the tray icon to reopen.",
+            QSystemTrayIcon.MessageIcon.Information,
+            2000,
+        )
+
+    # ------------------------------------------------------------------
     # Riot Client watcher
     # ------------------------------------------------------------------
 
@@ -133,9 +181,7 @@ class AccountManagerWindow(QWidget):
     def _check_riot_client(self) -> None:
         is_open = bool(win32gui.FindWindow(None, "Riot Client"))
         if is_open and not self._riot_client_was_open:
-            self.showNormal()
-            self.raise_()
-            self.activateWindow()
+            self._show_window()
         self._riot_client_was_open = is_open
 
     # ------------------------------------------------------------------
