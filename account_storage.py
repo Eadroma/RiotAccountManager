@@ -51,6 +51,7 @@ class AccountStorage:
                         username=item["username"],
                         password=self._decrypt(item["password"]),
                         note=item.get("note", ""),
+                        last_used=item.get("last_used", ""),
                     )
                 )
             except Exception:
@@ -64,6 +65,7 @@ class AccountStorage:
                 "username": account.username,
                 "password": self._encrypt(account.password),
                 "note": account.note,
+                "last_used": account.last_used,
             }
             for account in accounts
         ]
@@ -84,6 +86,15 @@ class AccountStorage:
         if not found:
             accounts.append(AccountEntry(username=username, password=password, note=note))
 
+        self.save_accounts(accounts)
+
+    def update_last_used(self, username: str) -> None:
+        from datetime import datetime
+        accounts = self.load_accounts()
+        for account in accounts:
+            if account.username.lower() == username.lower():
+                account.last_used = datetime.now().isoformat(timespec="seconds")
+                break
         self.save_accounts(accounts)
 
     def remove(self, username: str) -> None:

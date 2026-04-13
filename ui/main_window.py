@@ -1,3 +1,7 @@
+from datetime import datetime
+
+import win32gui
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -12,6 +16,20 @@ from account_storage import AccountStorage
 from riot_ui_login import RiotUIError, login
 
 
+def _format_last_used(iso: str) -> str:
+    if not iso:
+        return "Never"
+    delta = datetime.now() - datetime.fromisoformat(iso)
+    s = int(delta.total_seconds())
+    if s < 60:
+        return "Just now"
+    if s < 3600:
+        return f"{s // 60} minute{'s' if s // 60 != 1 else ''} ago"
+    if s < 86400:
+        return f"{s // 3600} hour{'s' if s // 3600 != 1 else ''} ago"
+    return f"{s // 86400} day{'s' if s // 86400 != 1 else ''} ago"
+
+
 class AccountManagerWindow(QWidget):
     """Main application window: account list on the left, form on the right."""
 
@@ -22,6 +40,7 @@ class AccountManagerWindow(QWidget):
         self.accounts = self.storage.load_accounts()
         self._build_ui()
         self._refresh_account_list()
+        self._start_riot_client_watcher()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -30,6 +49,7 @@ class AccountManagerWindow(QWidget):
     def _build_ui(self) -> None:
         self.account_list = QListWidget()
         self.account_list.currentRowChanged.connect(self._on_row_changed)
+        self.account_list.itemDoubleClicked.connect(lambda: self._login_account())
 
         up_button = QPushButton("▲")
         down_button = QPushButton("▼")
@@ -54,8 +74,20 @@ class AccountManagerWindow(QWidget):
         self.password_field.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_field.setPlaceholderText("Password")
 
+        self.toggle_pw_button = QPushButton("👁")
+        self.toggle_pw_button.setFixedWidth(30)
+        self.toggle_pw_button.setCheckable(True)
+        self.toggle_pw_button.clicked.connect(self._toggle_password_visibility)
+
+        pw_row = QHBoxLayout()
+        pw_row.addWidget(self.password_field)
+        pw_row.addWidget(self.toggle_pw_button)
+
         self.note_field = QLineEdit()
         self.note_field.setPlaceholderText("Note (optional)")
+
+        self.last_used_label = QLabel("Last used: —")
+        self.last_used_label.setStyleSheet("color: gray; font-size: 11px;")
 
         self.save_button = QPushButton("Save account")
         self.remove_button = QPushButton("Remove account")
@@ -72,9 +104,10 @@ class AccountManagerWindow(QWidget):
         form_layout.addWidget(QLabel("Username"))
         form_layout.addWidget(self.username_field)
         form_layout.addWidget(QLabel("Password"))
-        form_layout.addWidget(self.password_field)
+        form_layout.addLayout(pw_row)
         form_layout.addWidget(QLabel("Note"))
         form_layout.addWidget(self.note_field)
+        form_layout.addWidget(self.last_used_label)
         form_layout.addWidget(self.save_button)
         form_layout.addWidget(self.remove_button)
         form_layout.addWidget(self.login_button)
@@ -85,14 +118,31 @@ class AccountManagerWindow(QWidget):
         main_layout.addLayout(list_layout, 1)
         main_layout.addLayout(form_layout, 0)
 
-        self.setMinimumSize(560, 340)
+        self.setMinimumSize(560, 360)
+
+    # ------------------------------------------------------------------
+    # Riot Client watcher
+    # ------------------------------------------------------------------
+
+    def _start_riot_client_watcher(self) -> None:
+        self._riot_client_was_open = bool(win32gui.FindWindow(None, "Riot Client"))
+        self._watcher = QTimer(self)
+        self._watcher.timeout.connect(self._check_riot_client)
+        self._watcher.start(2000)
+
+    def _check_riot_client(self) -> None:
+        is_open = bool(win32gui.FindWindow(None, "Riot Client"))
+        if is_open and not self._riot_client_was_open:
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+        self._riot_client_was_open = is_open
 
     # ------------------------------------------------------------------
     # List helpers
     # ------------------------------------------------------------------
 
     def _label(self, account) -> str:
-        """Display text for a list entry."""
         if account.note:
             return f"{account.username} - {account.note}"
         return account.username
@@ -119,12 +169,18 @@ class AccountManagerWindow(QWidget):
             self.username_field.clear()
             self.password_field.clear()
             self.note_field.clear()
+            self.last_used_label.setText("Last used: —")
             return
 
         account = self.accounts[row]
         self.username_field.setText(account.username)
         self.password_field.setText(account.password)
         self.note_field.setText(account.note)
+        self.last_used_label.setText(f"Last used: {_format_last_used(account.last_used)}")
+
+    def _toggle_password_visibility(self, checked: bool) -> None:
+        mode = QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+        self.password_field.setEchoMode(mode)
 
     def _move_up(self) -> None:
         row = self.account_list.currentRow()
@@ -153,7 +209,6 @@ class AccountManagerWindow(QWidget):
             return
 
         self.storage.add_or_update(username, password, note)
-        # Keep selection on the saved account
         self.accounts = self.storage.load_accounts()
         row = next((i for i, a in enumerate(self.accounts) if a.username.lower() == username.lower()), 0)
         self._refresh_account_list(keep_row=row)
@@ -171,6 +226,7 @@ class AccountManagerWindow(QWidget):
         self.username_field.clear()
         self.password_field.clear()
         self.note_field.clear()
+        self.last_used_label.setText("Last used: —")
         self._set_status(f"Account '{username}' removed.")
 
     def _login_account(self) -> None:
@@ -182,6 +238,11 @@ class AccountManagerWindow(QWidget):
 
         try:
             login(username, password)
+            self.storage.update_last_used(username)
+            # Refresh label immediately
+            row = self.account_list.currentRow()
+            if 0 <= row < len(self.accounts):
+                self.last_used_label.setText("Last used: Just now")
             self._set_status(f"Credentials sent to Riot Client for '{username}'.")
         except RiotUIError as exc:
             self._set_status(str(exc), error=True)

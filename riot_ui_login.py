@@ -8,6 +8,7 @@ and simulating keyboard/mouse input.
 import time
 
 import pyautogui
+import pyperclip
 import win32con
 import win32gui
 
@@ -53,11 +54,14 @@ def _field_coords(hwnd: int) -> tuple[tuple[int, int], tuple[int, int]]:
 
 
 def _fill_field(pos: tuple[int, int], text: str) -> None:
+    """Click a field and paste text via clipboard (handles special characters)."""
     pyautogui.click(*pos)
     time.sleep(0.15)
     pyautogui.hotkey("ctrl", "a")
     time.sleep(0.05)
-    pyautogui.typewrite(text, interval=0.03)
+    pyperclip.copy(text)
+    pyautogui.hotkey("ctrl", "v")
+    time.sleep(0.05)
 
 
 def login(username: str, password: str) -> None:
@@ -75,3 +79,6 @@ def login(username: str, password: str) -> None:
 
     # Submit with Enter
     pyautogui.press("enter")
+
+    # Clear clipboard so the password doesn't linger
+    pyperclip.copy("")
