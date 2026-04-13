@@ -1,0 +1,7 @@
+PyQt6>=6.0
+cryptography>=41.0
+keyring>=24.0
+requests>=2.30
+pyautogui>=0.9
+pywinauto>=0.6
+pywin32>=306
