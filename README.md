@@ -1,4 +1,4 @@
-# AccountManager
+# <img src="icon.png" width="40" height="40" align="center"> AccountManager
 
 A lightweight Windows desktop app for switching between Riot Games accounts quickly.
 
