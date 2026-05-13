@@ -6,6 +6,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPainterPath
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -14,12 +15,16 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSystemTrayIcon,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from account_storage import AccountStorage
 from riot_ui_login import RiotUIError, login
+from settings_storage import AppSettings, load_settings, save_settings
+from ui.login_worker import LoginWorker
+from ui.settings_tab import SettingsTab
 
 _ICON_PATH = str(Path(__file__).parent.parent / "icon.ico")
 
@@ -145,13 +150,17 @@ class AccountManagerWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("AccountManager")
-        self.setMinimumSize(660, 440)
-        self.setStyleSheet(f"QWidget {{ background-color:{BG}; color:{TEXT}; font-family:'Segoe UI',system-ui,sans-serif; }}")
+        self.setMinimumSize(660, 480)
+        self.setStyleSheet(
+            f"QWidget {{ background-color:{BG}; color:{TEXT}; font-family:'Segoe UI',system-ui,sans-serif; }}"
+        )
 
         self.storage = AccountStorage()
         self.accounts: list = []
         self._selected_row = -1
         self._item_widgets: list[AccountItemWidget] = []
+        self._login_worker: LoginWorker | None = None
+        self._settings = load_settings()
 
         self._build_ui()
         self._refresh_list()
@@ -192,18 +201,40 @@ class AccountManagerWindow(QWidget):
         hl.addStretch()
         root.addWidget(header)
 
-        # Body
-        body = QWidget()
-        body_layout = QHBoxLayout(body)
+        # Tab widget
+        self._tabs = QTabWidget()
+        self._tabs.setStyleSheet(f"""
+            QTabWidget::pane {{ border:none; background:{BG}; }}
+            QTabBar::tab {{
+                background:{BTN}; color:{GRAY4}; border:none;
+                padding:7px 20px; font-size:12px; font-weight:500;
+                border-top-left-radius:5px; border-top-right-radius:5px;
+                margin-right:2px; margin-top:4px;
+            }}
+            QTabBar::tab:selected {{ background:{ITEM_SEL}; color:{TEXT}; margin-top:2px; }}
+            QTabBar::tab:hover:!selected {{ background:{BTN_HV}; color:{TEXT}; }}
+            QTabWidget > QWidget {{ background:{BG}; }}
+        """)
+
+        accounts_page = self._build_accounts_page()
+        self._tabs.addTab(accounts_page, "Accounts")
+
+        self._settings_tab = SettingsTab(self._settings)
+        self._settings_tab.settings_changed.connect(self._on_settings_changed)
+        self._tabs.addTab(self._settings_tab, "Settings")
+
+        root.addWidget(self._tabs, 1)
+
+    def _build_accounts_page(self) -> QWidget:
+        page = QWidget()
+        body_layout = QHBoxLayout(page)
         body_layout.setContentsMargins(20, 20, 20, 20)
         body_layout.setSpacing(20)
-        root.addWidget(body, 1)
 
         # ── Left panel ──────────────────────────────────────────────
         left = QVBoxLayout()
         left.setSpacing(8)
 
-        # "ACCOUNTS" label + reorder buttons
         sec_row = QHBoxLayout()
         sec_row.setContentsMargins(0, 0, 0, 0)
         sec_row.setSpacing(4)
@@ -223,7 +254,6 @@ class AccountManagerWindow(QWidget):
         sec_row.addWidget(self._down_btn)
         left.addLayout(sec_row)
 
-        # Scrollable account list
         self._list_container = QWidget()
         self._list_container.setStyleSheet("background:transparent;")
         self._list_layout = QVBoxLayout(self._list_container)
@@ -290,6 +320,21 @@ class AccountManagerWindow(QWidget):
             f"color:{GRAY5}; font-size:11px; background:transparent;"
         )
         right.addWidget(self.last_used_lbl)
+        right.addSpacing(6)
+
+        # Disconnect checkbox
+        self.disconnect_chk = QCheckBox("Disconnect current account first")
+        self.disconnect_chk.setChecked(self._settings.disconnect_first_default)
+        self.disconnect_chk.setStyleSheet(f"""
+            QCheckBox {{ color:{GRAY4}; font-size:12px; background:transparent; }}
+            QCheckBox::indicator {{
+                width:15px; height:15px;
+                border:1px solid {BORDER}; border-radius:3px; background:{BG_DARK};
+            }}
+            QCheckBox::indicator:checked {{ background:{RED}; border-color:{RED}; }}
+        """)
+        right.addWidget(self.disconnect_chk)
+
         right.addStretch()
 
         # Action buttons
@@ -311,11 +356,16 @@ class AccountManagerWindow(QWidget):
         self.status_lbl.hide()
         right.addWidget(self.status_lbl)
 
+        self._status_timer = QTimer(self)
+        self._status_timer.setSingleShot(True)
+        self._status_timer.timeout.connect(self.status_lbl.hide)
+
         self.save_btn.clicked.connect(self._save_account)
         self.remove_btn.clicked.connect(self._remove_account)
         self.login_btn.clicked.connect(self._login_account)
 
         body_layout.addLayout(right, 1)
+        return page
 
     # ── Account list ───────────────────────────────────────────────────
 
@@ -422,19 +472,48 @@ class AccountManagerWindow(QWidget):
         if not username or not password:
             self._set_status("Select an account or enter credentials first.", error=True)
             return
-        try:
-            login(username, password)
-            self.storage.update_last_used(username)
-            row = self._selected_row
-            if 0 <= row < len(self.accounts):
-                self.last_used_lbl.setText("Last used: Just now")
-            self._set_status(f"Credentials sent for '{username}'.")
-        except RiotUIError as exc:
-            self._set_status(str(exc), error=True)
-        except Exception as exc:
-            self._set_status(f"Unexpected error: {exc}", error=True)
+        if self._login_worker is not None:
+            return
 
-    def _set_status(self, msg: str, *, error: bool = False) -> None:
+        self.login_btn.setEnabled(False)
+        self.login_btn.setText("Logging in…")
+
+        worker = LoginWorker(
+            username,
+            password,
+            disconnect_first=self.disconnect_chk.isChecked(),
+            riot_client_path=self._settings.riot_client_path,
+        )
+        worker.progress.connect(lambda msg: self._set_status(msg, auto_hide=False))
+        worker.finished_ok.connect(self._on_login_ok)
+        worker.finished_err.connect(self._on_login_err)
+        worker.finished.connect(self._clear_login_worker)
+        self._login_worker = worker
+        worker.start()
+
+    def _clear_login_worker(self) -> None:
+        if self._login_worker:
+            self._login_worker.deleteLater()
+            self._login_worker = None
+
+    def _on_login_ok(self, username: str) -> None:
+        self.storage.update_last_used(username)
+        row = self._selected_row
+        if 0 <= row < len(self.accounts):
+            self.last_used_lbl.setText("Last used: Just now")
+        self._set_status(f"Credentials sent for '{username}'.")
+        self.login_btn.setEnabled(True)
+        self.login_btn.setText("Login  →")
+        if self._settings.auto_minimize_after_login:
+            self.hide()
+
+    def _on_login_err(self, msg: str) -> None:
+        self._set_status(msg, error=True)
+        self.login_btn.setEnabled(True)
+        self.login_btn.setText("Login  →")
+
+    def _set_status(self, msg: str, *, error: bool = False, auto_hide: bool = True) -> None:
+        self._status_timer.stop()
         self.status_lbl.show()
         if error:
             self.status_lbl.setStyleSheet(
@@ -447,7 +526,13 @@ class AccountManagerWindow(QWidget):
                 "border-radius:5px; color:#4ade80; font-size:12px; padding:6px 10px;"
             )
         self.status_lbl.setText(msg)
-        QTimer.singleShot(3000, self.status_lbl.hide)
+        if auto_hide:
+            self._status_timer.start(3000)
+
+    def _on_settings_changed(self) -> None:
+        self._settings = self._settings_tab.collect()
+        save_settings(self._settings)
+        self.disconnect_chk.setChecked(self._settings.disconnect_first_default)
 
     # ── System tray ────────────────────────────────────────────────────
 
@@ -472,14 +557,17 @@ class AccountManagerWindow(QWidget):
         self.activateWindow()
 
     def closeEvent(self, event) -> None:
-        event.ignore()
-        self.hide()
-        self._tray.showMessage(
-            "AccountManager",
-            "Running in the background. Click the tray icon to reopen.",
-            QSystemTrayIcon.MessageIcon.Information,
-            2000,
-        )
+        if self._settings.minimize_to_tray_on_close:
+            event.ignore()
+            self.hide()
+            self._tray.showMessage(
+                "AccountManager",
+                "Running in the background. Click the tray icon to reopen.",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000,
+            )
+        else:
+            QApplication.quit()
 
     # ── Riot Client watcher ────────────────────────────────────────────
 

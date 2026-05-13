@@ -52,7 +52,9 @@ def main() -> None:
 
     server.newConnection.connect(_on_new_connection)
 
-    window.show()
+    if not ("--minimized" in sys.argv or window._settings.start_minimized):
+        window.show()
+
     sys.exit(app.exec())
 
 

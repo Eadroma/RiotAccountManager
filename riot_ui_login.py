@@ -9,6 +9,7 @@ import time
 
 import pyautogui
 import pyperclip
+import win32api
 import win32con
 import win32gui
 
@@ -38,10 +39,16 @@ def _find_window() -> int:
     return hwnd
 
 
-def _bring_to_front(hwnd: int) -> None:
-    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-    win32gui.SetForegroundWindow(hwnd)
-    time.sleep(0.35)
+def _bring_to_front_reliable(hwnd: int, retries: int = 3) -> None:
+    for _ in range(retries):
+        win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+        win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        win32gui.SetForegroundWindow(hwnd)
+        time.sleep(0.35)
+        if win32gui.GetForegroundWindow() == hwnd:
+            return
+    raise RiotUIError("Could not bring Riot Client to foreground.")
 
 
 def _field_coords(hwnd: int) -> tuple[tuple[int, int], tuple[int, int]]:
@@ -64,13 +71,15 @@ def _fill_field(pos: tuple[int, int], text: str) -> None:
     time.sleep(0.05)
 
 
-def login(username: str, password: str) -> None:
+def login(username: str, password: str, *, hwnd: int | None = None) -> None:
     """Fill in the Riot Client sign-in form and submit it.
 
-    Raises RiotUIError if the window can't be found.
+    Raises RiotUIError if the window can't be found or focused.
+    Pass hwnd to skip window lookup (e.g. after wait_for_login_window).
     """
-    hwnd = _find_window()
-    _bring_to_front(hwnd)
+    if hwnd is None:
+        hwnd = _find_window()
+    _bring_to_front_reliable(hwnd)
 
     username_pos, password_pos = _field_coords(hwnd)
 
