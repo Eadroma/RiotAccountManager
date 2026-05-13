@@ -2,8 +2,8 @@ from datetime import datetime
 from pathlib import Path
 
 import win32gui
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QIcon, QPainter, QPainterPath
+from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPainterPath
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -25,6 +25,8 @@ from riot_ui_login import RiotUIError, login
 from settings_storage import AppSettings, load_settings, save_settings
 from ui.login_worker import LoginWorker
 from ui.settings_tab import SettingsTab
+from updater import UpdateChecker
+from version import VERSION
 
 _ICON_PATH = str(Path(__file__).parent.parent / "icon.ico")
 
@@ -166,6 +168,7 @@ class AccountManagerWindow(QWidget):
         self._refresh_list()
         self._start_tray()
         self._start_riot_client_watcher()
+        self._start_update_checker()
 
     # ── UI construction ────────────────────────────────────────────────
 
@@ -200,6 +203,36 @@ class AccountManagerWindow(QWidget):
         hl.addLayout(title_col)
         hl.addStretch()
         root.addWidget(header)
+
+        # Update banner (hidden until an update is detected)
+        self._update_banner = QFrame()
+        self._update_banner.setStyleSheet(
+            f"QFrame {{ background:rgba(200,155,60,.10); border:none; "
+            f"border-bottom:1px solid rgba(200,155,60,.25); }}"
+        )
+        bl = QHBoxLayout(self._update_banner)
+        bl.setContentsMargins(24, 7, 12, 7)
+        bl.setSpacing(8)
+        self._update_lbl = QLabel()
+        self._update_lbl.setStyleSheet(
+            f"color:{GOLD}; font-size:12px; background:transparent; text-decoration:underline;"
+        )
+        self._update_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._update_lbl.mousePressEvent = lambda _: QDesktopServices.openUrl(
+            QUrl(getattr(self, "_update_url", ""))
+        )
+        dismiss_btn = QPushButton("✕")
+        dismiss_btn.setFixedSize(22, 22)
+        dismiss_btn.setStyleSheet(
+            f"QPushButton {{ background:transparent; border:none; color:{GRAY5}; font-size:11px; }}"
+            f"QPushButton:hover {{ color:{TEXT}; }}"
+        )
+        dismiss_btn.clicked.connect(self._update_banner.hide)
+        bl.addWidget(self._update_lbl)
+        bl.addStretch()
+        bl.addWidget(dismiss_btn)
+        self._update_banner.hide()
+        root.addWidget(self._update_banner)
 
         # Tab widget
         self._tabs = QTabWidget()
@@ -387,6 +420,8 @@ class AccountManagerWindow(QWidget):
 
         target = keep_row if 0 <= keep_row < len(self._item_widgets) else (0 if self._item_widgets else -1)
         self._set_selected(target)
+        if hasattr(self, "_tray_menu"):
+            self._rebuild_tray_menu()
 
     def _set_selected(self, row: int) -> None:
         if 0 <= self._selected_row < len(self._item_widgets):
@@ -539,13 +574,66 @@ class AccountManagerWindow(QWidget):
     def _start_tray(self) -> None:
         self._tray = QSystemTrayIcon(QIcon(_ICON_PATH), self)
         self._tray.setToolTip("AccountManager")
-        menu = QMenu()
-        menu.addAction("Show").triggered.connect(self._show_window)
-        menu.addSeparator()
-        menu.addAction("Quit").triggered.connect(QApplication.quit)
-        self._tray.setContextMenu(menu)
+        self._tray_menu = QMenu()
+        self._tray.setContextMenu(self._tray_menu)
         self._tray.activated.connect(self._on_tray_activated)
         self._tray.show()
+        self._rebuild_tray_menu()
+
+    def _rebuild_tray_menu(self) -> None:
+        self._tray_menu.clear()
+        self._tray_menu.addAction("Show").triggered.connect(self._show_window)
+
+        if self.accounts:
+            self._tray_menu.addSeparator()
+            login_menu = self._tray_menu.addMenu("Login as…")
+            for acc in self.accounts:
+                action = login_menu.addAction(acc.username)
+                action.triggered.connect(
+                    lambda checked, u=acc.username, p=acc.password: self._tray_login(u, p)
+                )
+
+        self._tray_menu.addSeparator()
+        self._tray_menu.addAction("Quit").triggered.connect(QApplication.quit)
+
+    def _tray_login(self, username: str, password: str) -> None:
+        if self._login_worker is not None:
+            self._tray.showMessage(
+                "AccountManager",
+                "A login is already in progress.",
+                QSystemTrayIcon.MessageIcon.Warning,
+                3000,
+            )
+            return
+        worker = LoginWorker(
+            username,
+            password,
+            disconnect_first=self._settings.disconnect_first_default,
+            riot_client_path=self._settings.riot_client_path,
+        )
+        worker.finished_ok.connect(self._on_tray_login_ok)
+        worker.finished_err.connect(self._on_tray_login_err)
+        worker.finished.connect(self._clear_login_worker)
+        self._login_worker = worker
+        worker.start()
+
+    def _on_tray_login_ok(self, username: str) -> None:
+        self.storage.update_last_used(username)
+        self._refresh_list(keep_row=self._selected_row)
+        self._tray.showMessage(
+            "AccountManager",
+            f"Logged in as {username}.",
+            QSystemTrayIcon.MessageIcon.Information,
+            3000,
+        )
+
+    def _on_tray_login_err(self, msg: str) -> None:
+        self._tray.showMessage(
+            "AccountManager",
+            msg,
+            QSystemTrayIcon.MessageIcon.Critical,
+            4000,
+        )
 
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -582,6 +670,25 @@ class AccountManagerWindow(QWidget):
         if is_open and not self._riot_client_was_open:
             self._show_window()
         self._riot_client_was_open = is_open
+
+    # ── Update checker ─────────────────────────────────────────────────
+
+    def _start_update_checker(self) -> None:
+        self._updater = UpdateChecker(VERSION)
+        self._updater.update_found.connect(self._on_update_found)
+        self._updater.finished.connect(self._updater.deleteLater)
+        self._updater.start()
+
+    def _on_update_found(self, version: str, url: str) -> None:
+        self._update_url = url
+        self._update_lbl.setText(f"Version {version} available — click to download")
+        self._update_banner.show()
+        self._tray.showMessage(
+            "AccountManager",
+            f"Update available: v{version}. Open the app to download.",
+            QSystemTrayIcon.MessageIcon.Information,
+            4000,
+        )
 
 
 # ── Widget factory helpers ─────────────────────────────────────────────────
