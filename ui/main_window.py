@@ -278,13 +278,18 @@ class AccountManagerWindow(QWidget):
         )
         self._up_btn   = _icon_btn("▲")
         self._down_btn = _icon_btn("▼")
+        self._new_btn  = _icon_btn("+")
         self._up_btn.clicked.connect(self._move_up)
         self._down_btn.clicked.connect(self._move_down)
+        self._new_btn.clicked.connect(self._new_account)
+        self._new_btn.setToolTip("New account")
 
         sec_row.addWidget(sec_lbl)
         sec_row.addStretch()
         sec_row.addWidget(self._up_btn)
         sec_row.addWidget(self._down_btn)
+        sec_row.addSpacing(4)
+        sec_row.addWidget(self._new_btn)
         left.addLayout(sec_row)
 
         self._list_container = QWidget()
@@ -449,6 +454,11 @@ class AccountManagerWindow(QWidget):
         self.password_field.clear()
         self.note_field.clear()
         self.last_used_lbl.setText("")
+
+    def _new_account(self) -> None:
+        self._set_selected(-1)
+        self._clear_form()
+        self.username_field.setFocus()
 
     # ── Slots ──────────────────────────────────────────────────────────
 
