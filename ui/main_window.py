@@ -319,6 +319,10 @@ class AccountManagerWindow(QWidget):
         sec_row.addWidget(self._new_btn)
         left.addLayout(sec_row)
 
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(6)
+        filter_row.setContentsMargins(0, 0, 0, 0)
+
         self._search_field = QLineEdit()
         self._search_field.setPlaceholderText("Search accounts…")
         self._search_field.setFixedHeight(28)
@@ -330,8 +334,35 @@ class AccountManagerWindow(QWidget):
             }}
             QLineEdit:focus {{ border-color:{RED}; }}
         """)
-        self._search_field.textChanged.connect(self._filter_list)
-        left.addWidget(self._search_field)
+        self._search_field.textChanged.connect(self._apply_filters)
+
+        self._game_filter = QComboBox()
+        self._game_filter.addItem("All", "")
+        for game in GAMES[1:]:
+            abbr = GAME_PILLS[game][1] if game in GAME_PILLS else game
+            self._game_filter.addItem(abbr, game)
+        self._game_filter.setFixedHeight(28)
+        self._game_filter.setFixedWidth(80)
+        self._game_filter.setStyleSheet(f"""
+            QComboBox {{
+                background:{BG_DARK}; border:1px solid {BORDER};
+                border-radius:5px; padding:0 6px;
+                color:{GRAY4}; font-size:11px;
+            }}
+            QComboBox:focus {{ border-color:{RED}; }}
+            QComboBox::drop-down {{ border:none; width:16px; }}
+            QComboBox::down-arrow {{ image:none; width:0; }}
+            QComboBox QAbstractItemView {{
+                background:{BG_DARK}; border:1px solid {BORDER};
+                color:{TEXT}; selection-background-color:{ITEM_SEL};
+                font-size:11px;
+            }}
+        """)
+        self._game_filter.currentIndexChanged.connect(self._apply_filters)
+
+        filter_row.addWidget(self._search_field, 1)
+        filter_row.addWidget(self._game_filter)
+        left.addLayout(filter_row)
 
         self._list_container = QWidget()
         self._list_container.setStyleSheet("background:transparent;")
@@ -525,17 +556,19 @@ class AccountManagerWindow(QWidget):
         self._clear_form()
         self.username_field.setFocus()
 
-    def _filter_list(self, text: str) -> None:
-        q = text.lower()
+    def _apply_filters(self) -> None:
+        q = self._search_field.text().lower()
+        game_filter = self._game_filter.currentData()
         for w in self._item_widgets:
             acc = self.accounts[w._idx]
-            visible = (
+            text_match = (
                 not q
                 or q in acc.username.lower()
                 or q in acc.note.lower()
                 or q in acc.game.lower()
             )
-            w.setVisible(visible)
+            game_match = not game_filter or acc.game == game_filter
+            w.setVisible(text_match and game_match)
 
     # ── Slots ──────────────────────────────────────────────────────────
 
