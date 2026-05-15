@@ -7,6 +7,7 @@ from PyQt6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPainterPath
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -21,14 +22,25 @@ from PyQt6.QtWidgets import (
 )
 
 from account_storage import AccountStorage
+from login_history import add_login
 from riot_ui_login import RiotUIError, login
 from settings_storage import AppSettings, load_settings, save_settings
+from ui.history_tab import HistoryTab
 from ui.login_worker import LoginWorker
 from ui.settings_tab import SettingsTab
 from updater import UpdateChecker
 from version import VERSION
 
 _ICON_PATH = str(Path(__file__).parent.parent / "icon.ico")
+
+# ── Game tags ─────────────────────────────────────────────────────────────
+GAMES = ["", "League of Legends", "Valorant", "TFT", "Wild Rift"]
+GAME_PILLS = {
+    "League of Legends": ("#0bc4e3", "LoL"),
+    "Valorant":          ("#ff4655", "VAL"),
+    "TFT":               ("#c69b3a", "TFT"),
+    "Wild Rift":         ("#0ac8b9", "WR"),
+}
 
 # ── Palette ────────────────────────────────────────────────────────────────
 BG       = "#1a1a1f"
@@ -94,6 +106,16 @@ class AccountItemWidget(QFrame):
 
         hl.addLayout(col)
         hl.addStretch()
+
+        if account.game in GAME_PILLS:
+            color, abbr = GAME_PILLS[account.game]
+            pill = QLabel(abbr)
+            pill.setStyleSheet(
+                f"color:{color}; background:transparent;"
+                f"border:1px solid {color}; border-radius:3px;"
+                f"font-size:10px; padding:1px 5px;"
+            )
+            hl.addWidget(pill)
 
         has = bool(account.last_used)
         badge = QLabel(_fmt_time(account.last_used))
@@ -180,7 +202,7 @@ class AccountManagerWindow(QWidget):
         # Header
         header = QFrame()
         header.setStyleSheet(
-            f"QFrame {{ background-color:{BG_DARK}; border:none; border-bottom:1px solid {BORDER}; }}"
+            f"QFrame {{ background-color:{BG_DARK}; border:none; }}"
         )
         hl = QHBoxLayout(header)
         hl.setContentsMargins(24, 14, 24, 14)
@@ -252,9 +274,14 @@ class AccountManagerWindow(QWidget):
         accounts_page = self._build_accounts_page()
         self._tabs.addTab(accounts_page, "Accounts")
 
-        self._settings_tab = SettingsTab(self._settings)
+        self._settings_tab = SettingsTab(self._settings, self.storage)
         self._settings_tab.settings_changed.connect(self._on_settings_changed)
         self._tabs.addTab(self._settings_tab, "Settings")
+
+        self._history_tab = HistoryTab()
+        self._tabs.addTab(self._history_tab, "History")
+
+        self._tabs.currentChanged.connect(self._on_tab_changed)
 
         root.addWidget(self._tabs, 1)
 
@@ -291,6 +318,20 @@ class AccountManagerWindow(QWidget):
         sec_row.addSpacing(4)
         sec_row.addWidget(self._new_btn)
         left.addLayout(sec_row)
+
+        self._search_field = QLineEdit()
+        self._search_field.setPlaceholderText("Search accounts…")
+        self._search_field.setFixedHeight(28)
+        self._search_field.setStyleSheet(f"""
+            QLineEdit {{
+                background:{BG_DARK}; border:1px solid {BORDER};
+                border-radius:5px; padding:0 8px;
+                color:{TEXT}; font-size:12px;
+            }}
+            QLineEdit:focus {{ border-color:{RED}; }}
+        """)
+        self._search_field.textChanged.connect(self._filter_list)
+        left.addWidget(self._search_field)
 
         self._list_container = QWidget()
         self._list_container.setStyleSheet("background:transparent;")
@@ -351,6 +392,28 @@ class AccountManagerWindow(QWidget):
         right.addSpacing(5)
         self.note_field = _input("Optional note")
         right.addWidget(self.note_field)
+        right.addSpacing(14)
+
+        right.addWidget(_form_label("GAME"))
+        right.addSpacing(5)
+        self.game_combo = QComboBox()
+        self.game_combo.addItems(GAMES)
+        self.game_combo.setFixedHeight(34)
+        self.game_combo.setStyleSheet(f"""
+            QComboBox {{
+                background:{BG_DARK}; border:1px solid {BORDER};
+                border-radius:5px; padding:0 10px;
+                color:{TEXT}; font-size:13px;
+            }}
+            QComboBox:focus {{ border-color:{RED}; }}
+            QComboBox::drop-down {{ border:none; width:24px; }}
+            QComboBox::down-arrow {{ image:none; width:0; }}
+            QComboBox QAbstractItemView {{
+                background:{BG_DARK}; border:1px solid {BORDER};
+                color:{TEXT}; selection-background-color:{ITEM_SEL};
+            }}
+        """)
+        right.addWidget(self.game_combo)
         right.addSpacing(10)
 
         self.last_used_lbl = QLabel("")
@@ -446,6 +509,7 @@ class AccountManagerWindow(QWidget):
         self.username_field.setText(acc.username)
         self.password_field.setText(acc.password)
         self.note_field.setText(acc.note)
+        self.game_combo.setCurrentText(acc.game)
         lu = _fmt_time(acc.last_used) if acc.last_used else "Never"
         self.last_used_lbl.setText(f"Last used: {lu}")
 
@@ -453,12 +517,25 @@ class AccountManagerWindow(QWidget):
         self.username_field.clear()
         self.password_field.clear()
         self.note_field.clear()
+        self.game_combo.setCurrentIndex(0)
         self.last_used_lbl.setText("")
 
     def _new_account(self) -> None:
         self._set_selected(-1)
         self._clear_form()
         self.username_field.setFocus()
+
+    def _filter_list(self, text: str) -> None:
+        q = text.lower()
+        for w in self._item_widgets:
+            acc = self.accounts[w._idx]
+            visible = (
+                not q
+                or q in acc.username.lower()
+                or q in acc.note.lower()
+                or q in acc.game.lower()
+            )
+            w.setVisible(visible)
 
     # ── Slots ──────────────────────────────────────────────────────────
 
@@ -492,7 +569,7 @@ class AccountManagerWindow(QWidget):
         if not username or not password:
             self._set_status("Username and password are required.", error=True)
             return
-        self.storage.add_or_update(username, password, note)
+        self.storage.add_or_update(username, password, note, self.game_combo.currentText())
         self.accounts = self.storage.load_accounts()
         row = next(
             (i for i, a in enumerate(self.accounts) if a.username.lower() == username.lower()), 0
@@ -543,6 +620,7 @@ class AccountManagerWindow(QWidget):
 
     def _on_login_ok(self, username: str) -> None:
         self.storage.update_last_used(username)
+        add_login(username, game=self._get_account_game(username))
         row = self._selected_row
         if 0 <= row < len(self.accounts):
             self.last_used_lbl.setText("Last used: Just now")
@@ -573,6 +651,16 @@ class AccountManagerWindow(QWidget):
         self.status_lbl.setText(msg)
         if auto_hide:
             self._status_timer.start(3000)
+
+    def _on_tab_changed(self, index: int) -> None:
+        if self._tabs.widget(index) is self._history_tab:
+            self._history_tab.refresh()
+
+    def _get_account_game(self, username: str) -> str:
+        for a in self.accounts:
+            if a.username.lower() == username.lower():
+                return a.game
+        return ""
 
     def _on_settings_changed(self) -> None:
         self._settings = self._settings_tab.collect()
@@ -629,6 +717,7 @@ class AccountManagerWindow(QWidget):
 
     def _on_tray_login_ok(self, username: str) -> None:
         self.storage.update_last_used(username)
+        add_login(username, game=self._get_account_game(username))
         self._refresh_list(keep_row=self._selected_row)
         self._tray.showMessage(
             "AccountManager",

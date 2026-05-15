@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -17,6 +18,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from account_storage import AccountStorage
+from exporter import export_accounts, import_accounts
 from settings_storage import (
     AppSettings,
     auto_detect_riot_client,
@@ -102,8 +105,9 @@ def _btn(text: str) -> QPushButton:
 class SettingsTab(QWidget):
     settings_changed = pyqtSignal()
 
-    def __init__(self, s: AppSettings, parent=None) -> None:
+    def __init__(self, s: AppSettings, storage: AccountStorage, parent=None) -> None:
         super().__init__(parent)
+        self._storage = storage
 
         inner = QWidget()
         inner.setStyleSheet(f"background:{BG};")
@@ -175,6 +179,22 @@ class SettingsTab(QWidget):
         self._open_btn = _btn("Open data folder")
         self._open_btn.setFixedWidth(150)
         form.addWidget(self._open_btn)
+        form.addSpacing(6)
+
+        data_row = QHBoxLayout()
+        data_row.setSpacing(6)
+        self._export_btn = _btn("Export accounts…")
+        self._import_btn = _btn("Import accounts…")
+        data_row.addWidget(self._export_btn)
+        data_row.addWidget(self._import_btn)
+        data_row.addStretch()
+        form.addLayout(data_row)
+
+        self._data_status = QLabel("")
+        self._data_status.setStyleSheet(
+            f"color:{GRAY5}; font-size:11px; background:transparent;"
+        )
+        form.addWidget(self._data_status)
 
         form.addStretch()
 
@@ -200,6 +220,8 @@ class SettingsTab(QWidget):
         self._browse_btn.clicked.connect(self._on_browse)
         self._detect_btn.clicked.connect(self._on_detect)
         self._open_btn.clicked.connect(open_data_folder)
+        self._export_btn.clicked.connect(self._on_export)
+        self._import_btn.clicked.connect(self._on_import)
         self._startup_chk.toggled.connect(self._on_startup_toggled)
         self._minimized_chk.toggled.connect(self._emit)
         self._tray_radio.toggled.connect(self._emit)
@@ -266,3 +288,56 @@ class SettingsTab(QWidget):
             self._path_status.setText(f"Startup error: {exc}")
             return
         self._emit()
+
+    def _on_export(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export accounts", "", "AccountManager Backup (*.ambak)"
+        )
+        if not path:
+            return
+        pw, ok = QInputDialog.getText(
+            self, "Export — set password", "Password:", QLineEdit.EchoMode.Password
+        )
+        if not ok or not pw:
+            self._data_status.setStyleSheet("color:#f87171; font-size:11px; background:transparent;")
+            self._data_status.setText("Export cancelled — password is required.")
+            return
+        pw2, ok2 = QInputDialog.getText(
+            self, "Export — confirm password", "Confirm password:", QLineEdit.EchoMode.Password
+        )
+        if not ok2 or pw != pw2:
+            self._data_status.setStyleSheet("color:#f87171; font-size:11px; background:transparent;")
+            self._data_status.setText("Passwords do not match.")
+            return
+        try:
+            export_accounts(self._storage.load_accounts(), path, pw)
+            self._data_status.setStyleSheet(f"color:{GOLD}; font-size:11px; background:transparent;")
+            self._data_status.setText("Export successful.")
+        except Exception as exc:
+            self._data_status.setStyleSheet("color:#f87171; font-size:11px; background:transparent;")
+            self._data_status.setText(f"Export failed: {exc}")
+
+    def _on_import(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import accounts", "", "AccountManager Backup (*.ambak)"
+        )
+        if not path:
+            return
+        pw, ok = QInputDialog.getText(
+            self, "Import — enter password", "Password:", QLineEdit.EchoMode.Password
+        )
+        if not ok:
+            return
+        try:
+            accounts = import_accounts(path, pw)
+            for a in accounts:
+                self._storage.add_or_update(a.username, a.password, a.note, a.game)
+            self._data_status.setStyleSheet(f"color:{GOLD}; font-size:11px; background:transparent;")
+            self._data_status.setText(f"Imported {len(accounts)} account(s).")
+            self.settings_changed.emit()
+        except ValueError as exc:
+            self._data_status.setStyleSheet("color:#f87171; font-size:11px; background:transparent;")
+            self._data_status.setText(str(exc))
+        except Exception as exc:
+            self._data_status.setStyleSheet("color:#f87171; font-size:11px; background:transparent;")
+            self._data_status.setText(f"Import failed: {exc}")

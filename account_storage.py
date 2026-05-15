@@ -52,6 +52,7 @@ class AccountStorage:
                         password=self._decrypt(item["password"]),
                         note=item.get("note", ""),
                         last_used=item.get("last_used", ""),
+                        game=item.get("game", ""),
                     )
                 )
             except Exception:
@@ -66,6 +67,7 @@ class AccountStorage:
                 "password": self._encrypt(account.password),
                 "note": account.note,
                 "last_used": account.last_used,
+                "game": account.game,
             }
             for account in accounts
         ]
@@ -73,18 +75,19 @@ class AccountStorage:
         with STORAGE_FILE.open("w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2)
 
-    def add_or_update(self, username: str, password: str, note: str = "") -> None:
+    def add_or_update(self, username: str, password: str, note: str = "", game: str = "") -> None:
         accounts = self.load_accounts()
         found = False
         for account in accounts:
             if account.username.lower() == username.lower():
                 account.password = password
                 account.note = note
+                account.game = game
                 found = True
                 break
 
         if not found:
-            accounts.append(AccountEntry(username=username, password=password, note=note))
+            accounts.append(AccountEntry(username=username, password=password, note=note, game=game))
 
         self.save_accounts(accounts)
 
