@@ -2,7 +2,7 @@ from datetime import datetime
 from pathlib import Path
 
 import win32gui
-from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPainterPath
 from PyQt6.QtWidgets import (
     QApplication,
@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
@@ -22,6 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from account_storage import AccountStorage
+from global_hotkey import GlobalHotkeyThread
 from login_history import add_login
 from riot_ui_login import RiotUIError, login
 from settings_storage import AppSettings, load_settings, save_settings
@@ -32,6 +34,8 @@ from updater import UpdateChecker
 from version import VERSION
 
 _ICON_PATH = str(Path(__file__).parent.parent / "icon.ico")
+
+GROUP_COLORS = ["#C89B3C", "#0bc4e3", "#a78bfa", "#34d399", "#f97316", "#f472b6"]
 
 # ── Game tags ─────────────────────────────────────────────────────────────
 GAMES = ["", "League of Legends", "Valorant", "TFT", "Wild Rift"]
@@ -73,18 +77,26 @@ def _fmt_time(iso: str) -> str:
 class AccountItemWidget(QFrame):
     item_clicked   = pyqtSignal(int)
     double_clicked = pyqtSignal(int)
+    drag_started   = pyqtSignal(int)
+    drag_moved     = pyqtSignal(int, QPoint)
+    drag_ended     = pyqtSignal(int, QPoint)
 
-    def __init__(self, account, index: int, parent=None):
+    _DRAG_THRESHOLD = 8
+
+    def __init__(self, account, index: int, indented: bool = False, group_color: str = "", parent=None):
         super().__init__(parent)
         self._idx = index
         self._sel = False
         self._hov = False
+        self._group_color = group_color
+        self._drag_start: QPoint | None = None
+        self._dragging = False
         self.setFixedHeight(54)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAutoFillBackground(False)
 
         hl = QHBoxLayout(self)
-        hl.setContentsMargins(16, 8, 12, 8)
+        hl.setContentsMargins(28 if indented else 12, 8, 12, 8)
         hl.setSpacing(8)
 
         col = QVBoxLayout()
@@ -146,6 +158,8 @@ class AccountItemWidget(QFrame):
         p.fillPath(path, bg)
         if self._sel:
             p.fillRect(0, 6, 3, self.height() - 12, QColor(RED))
+        elif self._group_color:
+            p.fillRect(0, 6, 3, self.height() - 12, QColor(self._group_color))
         p.end()
 
     def enterEvent(self, e) -> None:
@@ -160,13 +174,82 @@ class AccountItemWidget(QFrame):
 
     def mousePressEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = e.globalPosition().toPoint()
+            self._dragging = False
             self.item_clicked.emit(self._idx)
         super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e) -> None:
+        if self._drag_start is not None and e.buttons() & Qt.MouseButton.LeftButton:
+            delta = e.globalPosition().toPoint() - self._drag_start
+            if not self._dragging and delta.manhattanLength() > self._DRAG_THRESHOLD:
+                self._dragging = True
+                self.grabMouse()
+                self.drag_started.emit(self._idx)
+            if self._dragging:
+                self.drag_moved.emit(self._idx, e.globalPosition().toPoint())
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e) -> None:
+        if e.button() == Qt.MouseButton.LeftButton:
+            if self._dragging:
+                self.releaseMouse()
+                self.drag_ended.emit(self._idx, e.globalPosition().toPoint())
+                self._dragging = False
+            self._drag_start = None
+        super().mouseReleaseEvent(e)
 
     def mouseDoubleClickEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
             self.double_clicked.emit(self._idx)
         super().mouseDoubleClickEvent(e)
+
+
+# ── Group header ───────────────────────────────────────────────────────────
+class GroupHeaderWidget(QFrame):
+    toggle_requested = pyqtSignal(str)
+
+    def __init__(self, name: str, count: int, collapsed: bool, color: str = GOLD, parent=None) -> None:
+        super().__init__(parent)
+        self._group_name = name
+        self._color = color
+        self.setFixedHeight(28)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet("QFrame { background:transparent; border:none; }")
+
+        hl = QHBoxLayout(self)
+        hl.setContentsMargins(6, 0, 8, 0)
+        hl.setSpacing(5)
+
+        self._arrow = QLabel("▶" if collapsed else "▼")
+        self._arrow.setStyleSheet(f"color:{GRAY5}; font-size:9px; background:transparent;")
+
+        name_lbl = QLabel(name)
+        name_lbl.setStyleSheet(
+            f"color:{GRAY4}; font-size:11px; font-weight:500; letter-spacing:0.5px; background:transparent;"
+        )
+
+        count_lbl = QLabel(f"({count})")
+        count_lbl.setStyleSheet(f"color:{GRAY5}; font-size:10px; background:transparent;")
+
+        hl.addWidget(self._arrow)
+        hl.addWidget(name_lbl)
+        hl.addWidget(count_lbl)
+        hl.addStretch()
+
+    def set_collapsed(self, v: bool) -> None:
+        self._arrow.setText("▶" if v else "▼")
+
+    def paintEvent(self, _) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(0, 4, 3, self.height() - 8, QColor(self._color))
+        p.end()
+
+    def mousePressEvent(self, e) -> None:
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.toggle_requested.emit(self._group_name)
+        super().mousePressEvent(e)
 
 
 # ── Main window ────────────────────────────────────────────────────────────
@@ -183,14 +266,21 @@ class AccountManagerWindow(QWidget):
         self.accounts: list = []
         self._selected_row = -1
         self._item_widgets: list[AccountItemWidget] = []
+        self._group_header_widgets: list[GroupHeaderWidget] = []
+        self._collapsed_groups: set[str] = set()
+        self._dragging_acc_idx: int | None = None
         self._login_worker: LoginWorker | None = None
+        self._hotkey_thread: GlobalHotkeyThread | None = None
         self._settings = load_settings()
 
         self._build_ui()
         self._refresh_list()
         self._start_tray()
+        QApplication.instance().installEventFilter(self)
+        QApplication.instance().aboutToQuit.connect(self._stop_hotkey)
         self._start_riot_client_watcher()
         self._start_update_checker()
+        self._start_hotkey()
 
     # ── UI construction ────────────────────────────────────────────────
 
@@ -371,7 +461,13 @@ class AccountManagerWindow(QWidget):
         self._list_layout.setSpacing(4)
         self._list_layout.addStretch()
 
-        scroll = QScrollArea()
+        self._drop_line = QFrame(self._list_container)
+        self._drop_line.setFixedHeight(2)
+        self._drop_line.setStyleSheet(f"background:{RED}; border:none; border-radius:1px;")
+        self._drop_line.hide()
+
+        self._list_scroll = QScrollArea()
+        scroll = self._list_scroll
         scroll.setWidget(self._list_container)
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -445,6 +541,28 @@ class AccountManagerWindow(QWidget):
             }}
         """)
         right.addWidget(self.game_combo)
+        right.addSpacing(14)
+
+        right.addWidget(_form_label("GROUP"))
+        right.addSpacing(5)
+        self.group_combo = QComboBox()
+        self.group_combo.setFixedHeight(34)
+        self.group_combo.setStyleSheet(f"""
+            QComboBox {{
+                background:{BG_DARK}; border:1px solid {BORDER};
+                border-radius:5px; padding:0 10px;
+                color:{TEXT}; font-size:13px;
+            }}
+            QComboBox:focus {{ border-color:{RED}; }}
+            QComboBox::drop-down {{ border:none; width:24px; }}
+            QComboBox::down-arrow {{ image:none; width:0; }}
+            QComboBox QAbstractItemView {{
+                background:{BG_DARK}; border:1px solid {BORDER};
+                color:{TEXT}; selection-background-color:{ITEM_SEL};
+            }}
+        """)
+        self.group_combo.currentIndexChanged.connect(self._on_group_combo_changed)
+        right.addWidget(self.group_combo)
         right.addSpacing(10)
 
         self.last_used_lbl = QLabel("")
@@ -501,7 +619,7 @@ class AccountManagerWindow(QWidget):
 
     # ── Account list ───────────────────────────────────────────────────
 
-    def _refresh_list(self, keep_row: int = -1) -> None:
+    def _refresh_list(self, keep_acc: int = -1) -> None:
         self.accounts = self.storage.load_accounts()
 
         while self._list_layout.count() > 1:
@@ -509,16 +627,61 @@ class AccountManagerWindow(QWidget):
             if item.widget():
                 item.widget().deleteLater()
         self._item_widgets.clear()
+        self._group_header_widgets.clear()
 
+        # Collect groups preserving order of first appearance
+        group_order: list[str] = []
+        groups: dict[str, list[int]] = {}
         for i, acc in enumerate(self.accounts):
-            w = AccountItemWidget(acc, i)
+            g = acc.group or ""
+            if g not in groups:
+                groups[g] = []
+                if g:
+                    group_order.append(g)
+            groups[g].append(i)
+
+        pos = 0
+
+        for color_idx, gname in enumerate(group_order):
+            color = GROUP_COLORS[color_idx % len(GROUP_COLORS)]
+            indices = groups[gname]
+            collapsed = gname in self._collapsed_groups
+            header = GroupHeaderWidget(gname, len(indices), collapsed, color=color)
+            header.toggle_requested.connect(self._toggle_group)
+            self._list_layout.insertWidget(pos, header)
+            self._group_header_widgets.append(header)
+            pos += 1
+            for acc_idx in indices:
+                w = AccountItemWidget(self.accounts[acc_idx], acc_idx, indented=True, group_color=color)
+                w.item_clicked.connect(self._on_item_clicked)
+                w.double_clicked.connect(lambda _: self._login_account())
+                w.drag_started.connect(self._on_drag_started)
+                w.drag_moved.connect(self._on_drag_moved)
+                w.drag_ended.connect(self._on_drag_ended)
+                w.setVisible(not collapsed)
+                self._item_widgets.append(w)
+                self._list_layout.insertWidget(pos, w)
+                pos += 1
+
+        for acc_idx in groups.get("", []):
+            w = AccountItemWidget(self.accounts[acc_idx], acc_idx)
             w.item_clicked.connect(self._on_item_clicked)
             w.double_clicked.connect(lambda _: self._login_account())
+            w.drag_started.connect(self._on_drag_started)
+            w.drag_moved.connect(self._on_drag_moved)
+            w.drag_ended.connect(self._on_drag_ended)
             self._item_widgets.append(w)
-            self._list_layout.insertWidget(i, w)
+            self._list_layout.insertWidget(pos, w)
+            pos += 1
 
-        target = keep_row if 0 <= keep_row < len(self._item_widgets) else (0 if self._item_widgets else -1)
-        self._set_selected(target)
+        if keep_acc >= 0:
+            widget_idx = next((i for i, w in enumerate(self._item_widgets) if w._idx == keep_acc), 0)
+        else:
+            widget_idx = 0 if self._item_widgets else -1
+
+        self._set_selected(widget_idx)
+        if hasattr(self, "group_combo"):
+            self._rebuild_group_combo()
         if hasattr(self, "_tray_menu"):
             self._rebuild_tray_menu()
 
@@ -528,37 +691,49 @@ class AccountManagerWindow(QWidget):
         self._selected_row = row
         if 0 <= row < len(self._item_widgets):
             self._item_widgets[row].set_selected(True)
-            self._populate_form(row)
+            self._populate_form(self._item_widgets[row]._idx)
         else:
             self._clear_form()
 
-    def _on_item_clicked(self, index: int) -> None:
-        self._set_selected(index)
+    def _on_item_clicked(self, acc_idx: int) -> None:
+        widget_idx = next((i for i, w in enumerate(self._item_widgets) if w._idx == acc_idx), -1)
+        self._set_selected(widget_idx)
 
-    def _populate_form(self, row: int) -> None:
-        acc = self.accounts[row]
+    def _populate_form(self, acc_idx: int) -> None:
+        acc = self.accounts[acc_idx]
         self.username_field.setText(acc.username)
         self.password_field.setText(acc.password)
         self.note_field.setText(acc.note)
         self.game_combo.setCurrentText(acc.game)
         lu = _fmt_time(acc.last_used) if acc.last_used else "Never"
         self.last_used_lbl.setText(f"Last used: {lu}")
+        self.group_combo.blockSignals(True)
+        idx = self.group_combo.findData(acc.group)
+        self.group_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.group_combo.blockSignals(False)
 
     def _clear_form(self) -> None:
         self.username_field.clear()
         self.password_field.clear()
         self.note_field.clear()
         self.game_combo.setCurrentIndex(0)
+        self.group_combo.blockSignals(True)
+        self.group_combo.setCurrentIndex(0)
+        self.group_combo.blockSignals(False)
         self.last_used_lbl.setText("")
 
     def _new_account(self) -> None:
         self._set_selected(-1)
+        self._rebuild_group_combo()
         self._clear_form()
         self.username_field.setFocus()
 
     def _apply_filters(self) -> None:
         q = self._search_field.text().lower()
         game_filter = self._game_filter.currentData()
+        filter_active = bool(q or game_filter)
+
+        acc_visible: dict[int, bool] = {}
         for w in self._item_widgets:
             acc = self.accounts[w._idx]
             text_match = (
@@ -568,7 +743,151 @@ class AccountManagerWindow(QWidget):
                 or q in acc.game.lower()
             )
             game_match = not game_filter or acc.game == game_filter
-            w.setVisible(text_match and game_match)
+            acc_visible[w._idx] = text_match and game_match
+
+        for w in self._item_widgets:
+            acc = self.accounts[w._idx]
+            if filter_active:
+                w.setVisible(acc_visible[w._idx])
+            else:
+                w.setVisible(acc.group not in self._collapsed_groups)
+
+        for header in self._group_header_widgets:
+            gname = header._group_name
+            if filter_active:
+                has_visible = any(
+                    acc_visible[w._idx]
+                    for w in self._item_widgets
+                    if self.accounts[w._idx].group == gname
+                )
+                header.setVisible(has_visible)
+            else:
+                header.setVisible(True)
+
+    def _toggle_group(self, group_name: str) -> None:
+        collapsed = group_name not in self._collapsed_groups
+        if collapsed:
+            self._collapsed_groups.add(group_name)
+        else:
+            self._collapsed_groups.discard(group_name)
+        for h in self._group_header_widgets:
+            if h._group_name == group_name:
+                h.set_collapsed(collapsed)
+                break
+        for w in self._item_widgets:
+            if self.accounts[w._idx].group == group_name:
+                w.setVisible(not collapsed)
+
+    # ── Drag-to-reorder ────────────────────────────────────────────────
+
+    def _on_drag_started(self, acc_idx: int) -> None:
+        self._dragging_acc_idx = acc_idx
+
+    def _on_drag_moved(self, acc_idx: int, global_pos: QPoint) -> None:
+        insert_before, _ = self._get_drop_target(global_pos)
+        y = self._drop_line_y(insert_before)
+        if y is not None:
+            self._drop_line.setGeometry(8, y - 1, self._list_container.width() - 16, 2)
+            self._drop_line.raise_()
+            self._drop_line.show()
+
+    def _on_drag_ended(self, acc_idx: int, global_pos: QPoint) -> None:
+        self._drop_line.hide()
+        insert_before, new_group = self._get_drop_target(global_pos)
+        self._dragging_acc_idx = None
+        is_noop = (
+            (insert_before == acc_idx or insert_before == acc_idx + 1)
+            and new_group == self.accounts[acc_idx].group
+        )
+        if not is_noop:
+            self._perform_drop(acc_idx, insert_before, new_group)
+
+    def _get_drop_target(self, global_pos: QPoint) -> tuple[int, str]:
+        local_y = self._list_container.mapFromGlobal(global_pos).y()
+
+        all_items: list[tuple[int, str, str, int | None]] = []  # (y, wtype, group, acc_idx)
+        for h in self._group_header_widgets:
+            if h.isVisible():
+                all_items.append((h.y(), "header", h._group_name, None))
+        for w in self._item_widgets:
+            if w.isVisible() and w._idx != self._dragging_acc_idx:
+                all_items.append((w.y(), "item", self.accounts[w._idx].group, w._idx))
+        all_items.sort(key=lambda x: x[0])
+
+        if not all_items:
+            return (-1, "")
+
+        for y, wtype, group, acc_idx in all_items:
+            mid = y + (28 if wtype == "header" else 54) // 2
+            if local_y <= mid:
+                if wtype == "header":
+                    first = next(
+                        (w._idx for w in self._item_widgets
+                         if self.accounts[w._idx].group == group and w._idx != self._dragging_acc_idx),
+                        -1,
+                    )
+                    return (first, group)
+                return (acc_idx, group)
+
+        last = all_items[-1]
+        return (-1, last[2])
+
+    def _drop_line_y(self, insert_before: int) -> int | None:
+        if insert_before >= 0:
+            w = next((w for w in self._item_widgets if w._idx == insert_before), None)
+            return w.y() if w else None
+        visible = [w for w in self._item_widgets if w.isVisible() and w._idx != self._dragging_acc_idx]
+        headers = [h for h in self._group_header_widgets if h.isVisible()]
+        all_v = visible + headers  # type: ignore[operator]
+        if not all_v:
+            return 0
+        last = max(all_v, key=lambda x: x.y() + x.height())
+        return last.y() + last.height()
+
+    def _perform_drop(self, dragged_acc_idx: int, insert_before: int, new_group: str) -> None:
+        accounts = self.storage.load_accounts()
+        dragged = accounts[dragged_acc_idx]
+        dragged.group = new_group
+        accounts.pop(dragged_acc_idx)
+        if insert_before < 0:
+            accounts.append(dragged)
+            new_idx = len(accounts) - 1
+        else:
+            if insert_before > dragged_acc_idx:
+                insert_before -= 1
+            accounts.insert(insert_before, dragged)
+            new_idx = insert_before
+        self.storage.save_accounts(accounts)
+        self._refresh_list(keep_acc=new_idx)
+
+    def _rebuild_group_combo(self) -> None:
+        prev = self.group_combo.currentData()
+        self.group_combo.blockSignals(True)
+        self.group_combo.clear()
+        self.group_combo.addItem("(No group)", "")
+        seen: set[str] = set()
+        for acc in self.accounts:
+            if acc.group and acc.group not in seen:
+                self.group_combo.addItem(acc.group, acc.group)
+                seen.add(acc.group)
+        self.group_combo.addItem("New group…", "__new__")
+        idx = self.group_combo.findData(prev)
+        self.group_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.group_combo.blockSignals(False)
+
+    def _on_group_combo_changed(self, _: int) -> None:
+        if self.group_combo.currentData() != "__new__":
+            return
+        name, ok = QInputDialog.getText(self, "New group", "Group name:")
+        self.group_combo.blockSignals(True)
+        if ok and name.strip():
+            name = name.strip()
+            insert_at = self.group_combo.count() - 1
+            self.group_combo.insertItem(insert_at, name, name)
+            self.group_combo.setCurrentIndex(insert_at)
+        else:
+            self.group_combo.setCurrentIndex(0)
+        self.group_combo.blockSignals(False)
 
     # ── Slots ──────────────────────────────────────────────────────────
 
@@ -579,45 +898,56 @@ class AccountManagerWindow(QWidget):
 
     def _move_up(self) -> None:
         row = self._selected_row
-        if row <= 0:
+        if row < 0 or not self._item_widgets:
+            return
+        acc_idx = self._item_widgets[row]._idx
+        if acc_idx <= 0:
             return
         accounts = self.storage.load_accounts()
-        accounts[row - 1], accounts[row] = accounts[row], accounts[row - 1]
+        accounts[acc_idx - 1], accounts[acc_idx] = accounts[acc_idx], accounts[acc_idx - 1]
         self.storage.save_accounts(accounts)
-        self._refresh_list(keep_row=row - 1)
+        self._refresh_list(keep_acc=acc_idx - 1)
 
     def _move_down(self) -> None:
         row = self._selected_row
-        accounts = self.storage.load_accounts()
-        if row < 0 or row >= len(accounts) - 1:
+        if row < 0 or not self._item_widgets:
             return
-        accounts[row], accounts[row + 1] = accounts[row + 1], accounts[row]
+        acc_idx = self._item_widgets[row]._idx
+        accounts = self.storage.load_accounts()
+        if acc_idx >= len(accounts) - 1:
+            return
+        accounts[acc_idx], accounts[acc_idx + 1] = accounts[acc_idx + 1], accounts[acc_idx]
         self.storage.save_accounts(accounts)
-        self._refresh_list(keep_row=row + 1)
+        self._refresh_list(keep_acc=acc_idx + 1)
 
     def _save_account(self) -> None:
         username = self.username_field.text().strip()
         password = self.password_field.text().strip()
         note     = self.note_field.text().strip()
+        group    = self.group_combo.currentData() or ""
+        if group == "__new__":
+            group = ""
         if not username or not password:
             self._set_status("Username and password are required.", error=True)
             return
-        self.storage.add_or_update(username, password, note, self.game_combo.currentText())
+        self.storage.add_or_update(username, password, note, self.game_combo.currentText(), group)
         self.accounts = self.storage.load_accounts()
-        row = next(
+        acc_idx = next(
             (i for i, a in enumerate(self.accounts) if a.username.lower() == username.lower()), 0
         )
-        self._refresh_list(keep_row=row)
+        self._refresh_list(keep_acc=acc_idx)
         self._set_status(f"Account '{username}' saved.")
 
     def _remove_account(self) -> None:
         row = self._selected_row
-        if row < 0:
+        if row < 0 or not self._item_widgets:
             self._set_status("Select an account to remove.", error=True)
             return
-        username = self.accounts[row].username
+        acc_idx = self._item_widgets[row]._idx
+        username = self.accounts[acc_idx].username
         self.storage.remove(username)
-        self._refresh_list(keep_row=max(0, row - 1))
+        keep = max(0, acc_idx - 1) if len(self.accounts) > 1 else -1
+        self._refresh_list(keep_acc=keep)
         self._clear_form()
         self._set_status(f"Account '{username}' removed.")
 
@@ -654,12 +984,14 @@ class AccountManagerWindow(QWidget):
     def _on_login_ok(self, username: str) -> None:
         self.storage.update_last_used(username)
         add_login(username, game=self._get_account_game(username))
-        row = self._selected_row
-        if 0 <= row < len(self.accounts):
+        if 0 <= self._selected_row < len(self._item_widgets):
             self.last_used_lbl.setText("Last used: Just now")
         self._set_status(f"Credentials sent for '{username}'.")
         self.login_btn.setEnabled(True)
         self.login_btn.setText("Login  →")
+        game = self._get_account_game(username)
+        tray_msg = f"Logged in as {username}" + (f"  ·  {game}" if game else "")
+        self._tray.showMessage("AccountManager", tray_msg, QSystemTrayIcon.MessageIcon.Information, 3000)
         if self._settings.auto_minimize_after_login:
             self.hide()
 
@@ -685,6 +1017,59 @@ class AccountManagerWindow(QWidget):
         if auto_hide:
             self._status_timer.start(3000)
 
+    # ── Keyboard navigation ────────────────────────────────────────────
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() != QEvent.Type.KeyPress or not self.isVisible():
+            return False
+        key = event.key()
+        mods = event.modifiers()
+        # Ctrl+F: focus search from anywhere
+        if key == Qt.Key.Key_F and mods & Qt.KeyboardModifier.ControlModifier:
+            self._search_field.setFocus()
+            self._search_field.selectAll()
+            return True
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QComboBox)):
+            return False
+        # /: focus search when no input is active
+        if key == Qt.Key.Key_Slash:
+            self._search_field.setFocus()
+            return True
+        if key == Qt.Key.Key_Up:
+            self._select_adjacent(-1)
+            return True
+        if key == Qt.Key.Key_Down:
+            self._select_adjacent(1)
+            return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._login_account()
+            return True
+        if key == Qt.Key.Key_Delete:
+            self._remove_account()
+            return True
+        if key == Qt.Key.Key_Escape:
+            self._set_selected(-1)
+            return True
+        return False
+
+    def _select_adjacent(self, direction: int) -> None:
+        visible = [w for w in self._item_widgets if w.isVisible()]
+        if not visible:
+            return
+        if self._selected_row < 0 or self._selected_row >= len(self._item_widgets):
+            target = visible[0] if direction > 0 else visible[-1]
+        else:
+            current = self._item_widgets[self._selected_row]
+            if current not in visible:
+                target = visible[0]
+            else:
+                i = visible.index(current)
+                target = visible[max(0, min(i + direction, len(visible) - 1))]
+        widget_idx = self._item_widgets.index(target)
+        self._set_selected(widget_idx)
+        self._list_scroll.ensureWidgetVisible(target)
+
     def _on_tab_changed(self, index: int) -> None:
         if self._tabs.widget(index) is self._history_tab:
             self._history_tab.refresh()
@@ -699,6 +1084,25 @@ class AccountManagerWindow(QWidget):
         self._settings = self._settings_tab.collect()
         save_settings(self._settings)
         self.disconnect_chk.setChecked(self._settings.disconnect_first_default)
+        self._start_hotkey()
+
+    def _start_hotkey(self) -> None:
+        if self._hotkey_thread is not None:
+            self._hotkey_thread.triggered.disconnect()
+            self._hotkey_thread.stop_thread()
+            self._hotkey_thread.wait()
+            self._hotkey_thread = None
+        hotkey = self._settings.global_hotkey
+        if hotkey:
+            self._hotkey_thread = GlobalHotkeyThread(hotkey, self)
+            self._hotkey_thread.triggered.connect(self._show_window)
+            self._hotkey_thread.start()
+
+    def _stop_hotkey(self) -> None:
+        if self._hotkey_thread is not None:
+            self._hotkey_thread.stop_thread()
+            self._hotkey_thread.wait()
+            self._hotkey_thread = None
 
     # ── System tray ────────────────────────────────────────────────────
 
@@ -787,6 +1191,7 @@ class AccountManagerWindow(QWidget):
                 2000,
             )
         else:
+            self._stop_hotkey()
             QApplication.quit()
 
     # ── Riot Client watcher ────────────────────────────────────────────

@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QKeySequence
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -38,6 +39,72 @@ BORDER  = "#2a2a32"
 TEXT    = "#ffffff"
 GRAY4   = "#9ca3af"
 GRAY5   = "#6b7280"
+
+
+class HotkeyCaptureField(QLineEdit):
+    hotkey_changed = pyqtSignal(str)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._hotkey = ""
+        self.setReadOnly(True)
+        self.setFixedHeight(32)
+        self.setPlaceholderText("Click then press a key combination…")
+        self.setStyleSheet(f"""
+            QLineEdit {{
+                background:{BG_DARK}; border:1px solid {BORDER};
+                border-radius:5px; padding:0 10px;
+                color:{TEXT}; font-size:12px;
+            }}
+            QLineEdit:focus {{ border-color:{GOLD}; }}
+        """)
+
+    def set_hotkey(self, hotkey: str) -> None:
+        self._hotkey = hotkey
+        self.setText(hotkey)
+
+    def mousePressEvent(self, e) -> None:
+        self.setText("Press keys…")
+        self.setFocus()
+        super().mousePressEvent(e)
+
+    def keyPressEvent(self, e) -> None:
+        key = e.key()
+        if key in (
+            Qt.Key.Key_Control, Qt.Key.Key_Shift,
+            Qt.Key.Key_Alt, Qt.Key.Key_Meta,
+        ):
+            return
+        if key == Qt.Key.Key_Escape:
+            self.setText(self._hotkey)
+            self.clearFocus()
+            return
+
+        parts = []
+        mods = e.modifiers()
+        if mods & Qt.KeyboardModifier.ControlModifier:
+            parts.append("Ctrl")
+        if mods & Qt.KeyboardModifier.AltModifier:
+            parts.append("Alt")
+        if mods & Qt.KeyboardModifier.ShiftModifier:
+            parts.append("Shift")
+
+        if Qt.Key.Key_A <= key <= Qt.Key.Key_Z:
+            parts.append(chr(key))
+        elif Qt.Key.Key_0 <= key <= Qt.Key.Key_9:
+            parts.append(chr(key))
+        elif Qt.Key.Key_F1 <= key <= Qt.Key.Key_F24:
+            parts.append(f"F{key - Qt.Key.Key_F1 + 1}")
+        else:
+            self.setText(self._hotkey)
+            self.clearFocus()
+            return
+
+        hotkey = "+".join(parts)
+        self._hotkey = hotkey
+        self.setText(hotkey)
+        self.clearFocus()
+        self.hotkey_changed.emit(hotkey)
 
 
 def _sec(text: str) -> QLabel:
@@ -171,6 +238,14 @@ class SettingsTab(QWidget):
         form.addSpacing(4)
         form.addWidget(self._disconnect_def_chk)
 
+        form.addSpacing(14)
+
+        # ── GLOBAL HOTKEY ────────────────────────────────────────
+        form.addWidget(_sec("GLOBAL HOTKEY"))
+        form.addSpacing(6)
+        self._hotkey_field = HotkeyCaptureField()
+        form.addWidget(self._hotkey_field)
+
         form.addSpacing(20)
 
         # ── DATA ─────────────────────────────────────────────────────
@@ -229,6 +304,7 @@ class SettingsTab(QWidget):
         self._auto_min_chk.toggled.connect(self._emit)
         self._disconnect_def_chk.toggled.connect(self._emit)
         self._path_field.textChanged.connect(self._emit)
+        self._hotkey_field.hotkey_changed.connect(self._emit)
 
     def populate(self, s: AppSettings) -> None:
         self._path_field.setText(s.riot_client_path)
@@ -238,6 +314,7 @@ class SettingsTab(QWidget):
         self._quit_radio.setChecked(not s.minimize_to_tray_on_close)
         self._auto_min_chk.setChecked(s.auto_minimize_after_login)
         self._disconnect_def_chk.setChecked(s.disconnect_first_default)
+        self._hotkey_field.set_hotkey(s.global_hotkey)
 
     def collect(self) -> AppSettings:
         return AppSettings(
@@ -247,6 +324,7 @@ class SettingsTab(QWidget):
             minimize_to_tray_on_close=self._tray_radio.isChecked(),
             auto_minimize_after_login=self._auto_min_chk.isChecked(),
             disconnect_first_default=self._disconnect_def_chk.isChecked(),
+            global_hotkey=self._hotkey_field._hotkey,
         )
 
     def _emit(self) -> None:

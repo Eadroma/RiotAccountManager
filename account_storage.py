@@ -53,6 +53,7 @@ class AccountStorage:
                         note=item.get("note", ""),
                         last_used=item.get("last_used", ""),
                         game=item.get("game", ""),
+                        group=item.get("group", ""),
                     )
                 )
             except Exception:
@@ -68,6 +69,7 @@ class AccountStorage:
                 "note": account.note,
                 "last_used": account.last_used,
                 "game": account.game,
+                "group": account.group,
             }
             for account in accounts
         ]
@@ -75,7 +77,7 @@ class AccountStorage:
         with STORAGE_FILE.open("w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2)
 
-    def add_or_update(self, username: str, password: str, note: str = "", game: str = "") -> None:
+    def add_or_update(self, username: str, password: str, note: str = "", game: str = "", group: str = "") -> None:
         accounts = self.load_accounts()
         found = False
         for account in accounts:
@@ -83,11 +85,12 @@ class AccountStorage:
                 account.password = password
                 account.note = note
                 account.game = game
+                account.group = group
                 found = True
                 break
 
         if not found:
-            accounts.append(AccountEntry(username=username, password=password, note=note, game=game))
+            accounts.append(AccountEntry(username=username, password=password, note=note, game=game, group=group))
 
         self.save_accounts(accounts)
 

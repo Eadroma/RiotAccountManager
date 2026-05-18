@@ -28,6 +28,7 @@ class AppSettings:
     minimize_to_tray_on_close: bool = True
     auto_minimize_after_login: bool = False
     disconnect_first_default: bool = False
+    global_hotkey: str = "Ctrl+Shift+A"
 
 
 def load_settings() -> AppSettings:

@@ -30,6 +30,7 @@ def export_accounts(accounts: list[AccountEntry], path: str, password: str) -> N
                 "note": a.note,
                 "last_used": a.last_used,
                 "game": a.game,
+                "group": a.group,
             }
             for a in accounts
         ],
@@ -69,6 +70,7 @@ def import_accounts(path: str, password: str) -> list[AccountEntry]:
             note=item.get("note", ""),
             last_used=item.get("last_used", ""),
             game=item.get("game", ""),
+            group=item.get("group", ""),
         )
         for item in items
     ]
