@@ -3,7 +3,13 @@ from __future__ import annotations
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from riot_ui_login import RiotUIError, login
-from riot_process import kill_riot_processes, launch_riot_client, wait_for_login_window
+from riot_process import (
+    GAME_PRODUCTS,
+    kill_riot_processes,
+    launch_game,
+    launch_riot_client,
+    wait_for_login_window,
+)
 
 
 class LoginWorker(QThread):
@@ -18,12 +24,14 @@ class LoginWorker(QThread):
         *,
         disconnect_first: bool = False,
         riot_client_path: str = "",
+        game: str = "",
     ) -> None:
         super().__init__()
         self._username = username
         self._password = password
         self._disconnect_first = disconnect_first
         self._riot_client_path = riot_client_path
+        self._game = game
 
     def run(self) -> None:
         try:
@@ -45,6 +53,11 @@ class LoginWorker(QThread):
 
             login(self._username, self._password, hwnd=hwnd)
             self.finished_ok.emit(self._username)
+
+            if self._game in GAME_PRODUCTS:
+                self.progress.emit(f"Waiting for sign-in to start {self._game}…")
+                launch_game(self._game)
+                self.progress.emit(f"Starting {self._game}…")
         except (RiotUIError, FileNotFoundError) as exc:
             self.finished_err.emit(str(exc))
         except Exception as exc:

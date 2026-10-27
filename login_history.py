@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from account_storage import DATA_DIR
+from account_storage import DATA_DIR, write_json_atomic
 
 HISTORY_FILE = DATA_DIR / "history.json"
 MAX_ENTRIES = 500
@@ -18,8 +18,7 @@ def add_login(username: str, game: str = "") -> None:
     })
     if len(entries) > MAX_ENTRIES:
         entries = entries[-MAX_ENTRIES:]
-    with HISTORY_FILE.open("w", encoding="utf-8") as f:
-        json.dump(entries, f, indent=2)
+    write_json_atomic(HISTORY_FILE, entries)
 
 
 def load_history() -> list[dict]:
@@ -27,8 +26,7 @@ def load_history() -> list[dict]:
 
 
 def clear_history() -> None:
-    with HISTORY_FILE.open("w", encoding="utf-8") as f:
-        json.dump([], f)
+    write_json_atomic(HISTORY_FILE, [])
 
 
 def _load_raw() -> list[dict]:

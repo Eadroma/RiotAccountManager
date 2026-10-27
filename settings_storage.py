@@ -7,7 +7,7 @@ import winreg
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from account_storage import DATA_DIR
+from account_storage import DATA_DIR, write_json_atomic
 
 SETTINGS_FILE = DATA_DIR / "settings.json"
 _STARTUP_KEY   = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -28,6 +28,7 @@ class AppSettings:
     minimize_to_tray_on_close: bool = True
     auto_minimize_after_login: bool = False
     disconnect_first_default: bool = False
+    launch_game_after_login: bool = True
     global_hotkey: str = "Ctrl+Shift+A"
 
 
@@ -42,7 +43,7 @@ def load_settings() -> AppSettings:
 
 def save_settings(s: AppSettings) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    SETTINGS_FILE.write_text(json.dumps(asdict(s), indent=2), encoding="utf-8")
+    write_json_atomic(SETTINGS_FILE, asdict(s))
 
 
 def auto_detect_riot_client() -> str:
@@ -64,7 +65,14 @@ def auto_detect_riot_client() -> str:
     return ""
 
 
-def set_startup(enabled: bool, exe_path: str) -> None:
+def _startup_command() -> str:
+    if getattr(sys, "frozen", False):  # PyInstaller exe
+        return f'"{sys.executable}" --minimized'
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    return f'"{pythonw}" "{Path(sys.argv[0]).resolve()}" --minimized'
+
+
+def set_startup(enabled: bool) -> None:
     key = winreg.OpenKey(
         winreg.HKEY_CURRENT_USER,
         _STARTUP_KEY,
@@ -72,7 +80,7 @@ def set_startup(enabled: bool, exe_path: str) -> None:
     )
     try:
         if enabled:
-            winreg.SetValueEx(key, _STARTUP_VALUE, 0, winreg.REG_SZ, f'"{exe_path}" --minimized')
+            winreg.SetValueEx(key, _STARTUP_VALUE, 0, winreg.REG_SZ, _startup_command())
         else:
             try:
                 winreg.DeleteValue(key, _STARTUP_VALUE)

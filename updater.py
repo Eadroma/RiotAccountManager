@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-import requests
+import json
+import urllib.request
+
 from PyQt6.QtCore import QThread, pyqtSignal
+
+_LATEST_URL = "https://api.github.com/repos/Eadroma/RiotAccountManager/releases/latest"
 
 
 class UpdateChecker(QThread):
@@ -13,13 +17,12 @@ class UpdateChecker(QThread):
 
     def run(self) -> None:
         try:
-            r = requests.get(
-                "https://api.github.com/repos/Eadroma/RiotAccountManager/releases/latest",
-                timeout=5,
-                headers={"Accept": "application/vnd.github.v3+json"},
+            req = urllib.request.Request(
+                _LATEST_URL,
+                headers={"Accept": "application/vnd.github+json", "User-Agent": "AccountManager"},
             )
-            r.raise_for_status()
-            data = r.json()
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.load(resp)
             tag = data.get("tag_name", "").lstrip("v")
             url = data.get("html_url", "")
             if tag and url and _version_gt(tag, self._current):

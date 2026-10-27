@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSystemTrayIcon,
@@ -23,44 +24,22 @@ from PyQt6.QtWidgets import (
 )
 
 from account_storage import AccountStorage
+from models import AccountEntry
 from global_hotkey import GlobalHotkeyThread
 from login_history import add_login
-from riot_ui_login import RiotUIError, login
-from settings_storage import AppSettings, load_settings, save_settings
+from settings_storage import load_settings, save_settings
 from ui.history_tab import HistoryTab
 from ui.login_worker import LoginWorker
 from ui.settings_tab import SettingsTab
+from ui.theme import (
+    BG, BG_DARK, BORDER, BTN, BTN_HV, GAME_PILLS, GAMES, GOLD, GRAY4, GRAY5, GROUP_COLORS,
+    ITEM, ITEM_HV, ITEM_SEL, RED, RED_HV, TEXT,
+)
 from updater import UpdateChecker
 from version import VERSION
 
 _ICON_PATH = str(Path(__file__).parent.parent / "icon.ico")
 
-GROUP_COLORS = ["#C89B3C", "#0bc4e3", "#a78bfa", "#34d399", "#f97316", "#f472b6"]
-
-# ── Game tags ─────────────────────────────────────────────────────────────
-GAMES = ["", "League of Legends", "Valorant", "TFT", "Wild Rift"]
-GAME_PILLS = {
-    "League of Legends": ("#0bc4e3", "LoL"),
-    "Valorant":          ("#ff4655", "VAL"),
-    "TFT":               ("#c69b3a", "TFT"),
-    "Wild Rift":         ("#0ac8b9", "WR"),
-}
-
-# ── Palette ────────────────────────────────────────────────────────────────
-BG       = "#1a1a1f"
-BG_DARK  = "#14141a"
-ITEM     = "#1e1e26"
-ITEM_HV  = "#232329"
-ITEM_SEL = "#25252d"
-BTN      = "#25252d"
-BTN_HV   = "#2f2f39"
-RED      = "#D13639"
-RED_HV   = "#e63e41"
-GOLD     = "#C89B3C"
-BORDER   = "#2a2a32"
-TEXT     = "#ffffff"
-GRAY4    = "#9ca3af"
-GRAY5    = "#6b7280"
 
 
 def _fmt_time(iso: str) -> str:
@@ -361,11 +340,12 @@ class AccountManagerWindow(QWidget):
             QTabWidget > QWidget {{ background:{BG}; }}
         """)
 
-        accounts_page = self._build_accounts_page()
-        self._tabs.addTab(accounts_page, "Accounts")
+        self._accounts_page = self._build_accounts_page()
+        self._tabs.addTab(self._accounts_page, "Accounts")
 
         self._settings_tab = SettingsTab(self._settings, self.storage)
         self._settings_tab.settings_changed.connect(self._on_settings_changed)
+        self._settings_tab.accounts_changed.connect(lambda: self._refresh_list(self._selected_acc_idx()))
         self._tabs.addTab(self._settings_tab, "Settings")
 
         self._history_tab = HistoryTab()
@@ -396,8 +376,8 @@ class AccountManagerWindow(QWidget):
         self._up_btn   = _icon_btn("▲")
         self._down_btn = _icon_btn("▼")
         self._new_btn  = _icon_btn("+")
-        self._up_btn.clicked.connect(self._move_up)
-        self._down_btn.clicked.connect(self._move_down)
+        self._up_btn.clicked.connect(lambda: self._move(-1))
+        self._down_btn.clicked.connect(lambda: self._move(1))
         self._new_btn.clicked.connect(self._new_account)
         self._new_btn.setToolTip("New account")
 
@@ -523,44 +503,14 @@ class AccountManagerWindow(QWidget):
 
         right.addWidget(_form_label("GAME"))
         right.addSpacing(5)
-        self.game_combo = QComboBox()
+        self.game_combo = _combo()
         self.game_combo.addItems(GAMES)
-        self.game_combo.setFixedHeight(34)
-        self.game_combo.setStyleSheet(f"""
-            QComboBox {{
-                background:{BG_DARK}; border:1px solid {BORDER};
-                border-radius:5px; padding:0 10px;
-                color:{TEXT}; font-size:13px;
-            }}
-            QComboBox:focus {{ border-color:{RED}; }}
-            QComboBox::drop-down {{ border:none; width:24px; }}
-            QComboBox::down-arrow {{ image:none; width:0; }}
-            QComboBox QAbstractItemView {{
-                background:{BG_DARK}; border:1px solid {BORDER};
-                color:{TEXT}; selection-background-color:{ITEM_SEL};
-            }}
-        """)
         right.addWidget(self.game_combo)
         right.addSpacing(14)
 
         right.addWidget(_form_label("GROUP"))
         right.addSpacing(5)
-        self.group_combo = QComboBox()
-        self.group_combo.setFixedHeight(34)
-        self.group_combo.setStyleSheet(f"""
-            QComboBox {{
-                background:{BG_DARK}; border:1px solid {BORDER};
-                border-radius:5px; padding:0 10px;
-                color:{TEXT}; font-size:13px;
-            }}
-            QComboBox:focus {{ border-color:{RED}; }}
-            QComboBox::drop-down {{ border:none; width:24px; }}
-            QComboBox::down-arrow {{ image:none; width:0; }}
-            QComboBox QAbstractItemView {{
-                background:{BG_DARK}; border:1px solid {BORDER};
-                color:{TEXT}; selection-background-color:{ITEM_SEL};
-            }}
-        """)
+        self.group_combo = _combo()
         self.group_combo.currentIndexChanged.connect(self._on_group_combo_changed)
         right.addWidget(self.group_combo)
         right.addSpacing(10)
@@ -606,6 +556,7 @@ class AccountManagerWindow(QWidget):
         self.status_lbl.hide()
         right.addWidget(self.status_lbl)
 
+        self._status_error = False
         self._status_timer = QTimer(self)
         self._status_timer.setSingleShot(True)
         self._status_timer.timeout.connect(self.status_lbl.hide)
@@ -684,6 +635,12 @@ class AccountManagerWindow(QWidget):
             self._rebuild_group_combo()
         if hasattr(self, "_tray_menu"):
             self._rebuild_tray_menu()
+
+    def _selected_acc_idx(self) -> int:
+        """Account index (position in storage) of the selected row, or -1."""
+        if 0 <= self._selected_row < len(self._item_widgets):
+            return self._item_widgets[self._selected_row]._idx
+        return -1
 
     def _set_selected(self, row: int) -> None:
         if 0 <= self._selected_row < len(self._item_widgets):
@@ -896,29 +853,20 @@ class AccountManagerWindow(QWidget):
             QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
         )
 
-    def _move_up(self) -> None:
-        row = self._selected_row
-        if row < 0 or not self._item_widgets:
-            return
-        acc_idx = self._item_widgets[row]._idx
-        if acc_idx <= 0:
+    def _move(self, step: int) -> None:
+        acc_idx = self._selected_acc_idx()
+        if acc_idx < 0:
             return
         accounts = self.storage.load_accounts()
-        accounts[acc_idx - 1], accounts[acc_idx] = accounts[acc_idx], accounts[acc_idx - 1]
-        self.storage.save_accounts(accounts)
-        self._refresh_list(keep_acc=acc_idx - 1)
-
-    def _move_down(self) -> None:
-        row = self._selected_row
-        if row < 0 or not self._item_widgets:
+        group = accounts[acc_idx].group
+        # The list is shown grouped, so swap with the nearest account of the same group.
+        stop = -1 if step < 0 else len(accounts)
+        other = next((i for i in range(acc_idx + step, stop, step) if accounts[i].group == group), None)
+        if other is None:
             return
-        acc_idx = self._item_widgets[row]._idx
-        accounts = self.storage.load_accounts()
-        if acc_idx >= len(accounts) - 1:
-            return
-        accounts[acc_idx], accounts[acc_idx + 1] = accounts[acc_idx + 1], accounts[acc_idx]
+        accounts[acc_idx], accounts[other] = accounts[other], accounts[acc_idx]
         self.storage.save_accounts(accounts)
-        self._refresh_list(keep_acc=acc_idx + 1)
+        self._refresh_list(keep_acc=other)
 
     def _save_account(self) -> None:
         username = self.username_field.text().strip()
@@ -930,11 +878,24 @@ class AccountManagerWindow(QWidget):
         if not username or not password:
             self._set_status("Username and password are required.", error=True)
             return
-        self.storage.add_or_update(username, password, note, self.game_combo.currentText(), group)
-        self.accounts = self.storage.load_accounts()
-        acc_idx = next(
-            (i for i, a in enumerate(self.accounts) if a.username.lower() == username.lower()), 0
+        accounts = self.storage.load_accounts()
+        selected = self._selected_acc_idx()
+        same_name = next(
+            (i for i, a in enumerate(accounts) if a.username.lower() == username.lower()), -1
         )
+        if selected >= 0 and same_name not in (-1, selected):
+            self._set_status(f"Another account already uses '{username}'.", error=True)
+            return
+        # Editing the selected account renames it; with nothing selected, a matching name is updated.
+        acc_idx = selected if selected >= 0 else same_name
+        entry = AccountEntry(username, password, note, game=self.game_combo.currentText(), group=group)
+        if acc_idx >= 0:
+            entry.last_used = accounts[acc_idx].last_used
+            accounts[acc_idx] = entry
+        else:
+            accounts.append(entry)
+            acc_idx = len(accounts) - 1
+        self.storage.save_accounts(accounts)
         self._refresh_list(keep_acc=acc_idx)
         self._set_status(f"Account '{username}' saved.")
 
@@ -945,6 +906,9 @@ class AccountManagerWindow(QWidget):
             return
         acc_idx = self._item_widgets[row]._idx
         username = self.accounts[acc_idx].username
+        answer = QMessageBox.question(self, "Remove account", f"Remove '{username}'?")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         self.storage.remove(username)
         keep = max(0, acc_idx - 1) if len(self.accounts) > 1 else -1
         self._refresh_list(keep_acc=keep)
@@ -957,7 +921,11 @@ class AccountManagerWindow(QWidget):
         if not username or not password:
             self._set_status("Select an account or enter credentials first.", error=True)
             return
+        self._start_login(username, password, self.disconnect_chk.isChecked())
+
+    def _start_login(self, username: str, password: str, disconnect_first: bool) -> None:
         if self._login_worker is not None:
+            self._notify("A login is already in progress.", error=True)
             return
 
         self.login_btn.setEnabled(False)
@@ -966,8 +934,9 @@ class AccountManagerWindow(QWidget):
         worker = LoginWorker(
             username,
             password,
-            disconnect_first=self.disconnect_chk.isChecked(),
+            disconnect_first=disconnect_first,
             riot_client_path=self._settings.riot_client_path,
+            game=self._get_account_game(username) if self._settings.launch_game_after_login else "",
         )
         worker.progress.connect(lambda msg: self._set_status(msg, auto_hide=False))
         worker.finished_ok.connect(self._on_login_ok)
@@ -980,28 +949,35 @@ class AccountManagerWindow(QWidget):
         if self._login_worker:
             self._login_worker.deleteLater()
             self._login_worker = None
-
-    def _on_login_ok(self, username: str) -> None:
-        self.storage.update_last_used(username)
-        add_login(username, game=self._get_account_game(username))
-        if 0 <= self._selected_row < len(self._item_widgets):
-            self.last_used_lbl.setText("Last used: Just now")
-        self._set_status(f"Credentials sent for '{username}'.")
+        if not self._status_error:  # progress messages don't auto-hide; login errors stay
+            self._status_timer.start(3000)
         self.login_btn.setEnabled(True)
         self.login_btn.setText("Login  →")
+
+    def _on_login_ok(self, username: str) -> None:
         game = self._get_account_game(username)
+        self.storage.update_last_used(username)
+        add_login(username, game=game)
+        self._refresh_list(keep_acc=self._selected_acc_idx())
+        self._set_status(f"Credentials sent for '{username}'.")
         tray_msg = f"Logged in as {username}" + (f"  ·  {game}" if game else "")
         self._tray.showMessage("AccountManager", tray_msg, QSystemTrayIcon.MessageIcon.Information, 3000)
         if self._settings.auto_minimize_after_login:
             self.hide()
 
     def _on_login_err(self, msg: str) -> None:
-        self._set_status(msg, error=True)
-        self.login_btn.setEnabled(True)
-        self.login_btn.setText("Login  →")
+        self._notify(msg, error=True, auto_hide=False)
+
+    def _notify(self, msg: str, *, error: bool = False, auto_hide: bool = True) -> None:
+        """Status line in the window, plus a tray balloon when the window is hidden."""
+        self._set_status(msg, error=error, auto_hide=auto_hide)
+        if not self.isVisible():
+            icon = QSystemTrayIcon.MessageIcon.Critical if error else QSystemTrayIcon.MessageIcon.Information
+            self._tray.showMessage("AccountManager", msg, icon, 4000)
 
     def _set_status(self, msg: str, *, error: bool = False, auto_hide: bool = True) -> None:
         self._status_timer.stop()
+        self._status_error = error
         self.status_lbl.show()
         if error:
             self.status_lbl.setStyleSheet(
@@ -1021,6 +997,9 @@ class AccountManagerWindow(QWidget):
 
     def eventFilter(self, obj, event) -> bool:
         if event.type() != QEvent.Type.KeyPress or not self.isVisible():
+            return False
+        # Ignore keys meant for dialogs or for the Settings/History tabs.
+        if QApplication.activeWindow() is not self or self._tabs.currentWidget() is not self._accounts_page:
             return False
         key = event.key()
         mods = event.modifiers()
@@ -1081,10 +1060,12 @@ class AccountManagerWindow(QWidget):
         return ""
 
     def _on_settings_changed(self) -> None:
+        old_hotkey = self._settings.global_hotkey
         self._settings = self._settings_tab.collect()
         save_settings(self._settings)
         self.disconnect_chk.setChecked(self._settings.disconnect_first_default)
-        self._start_hotkey()
+        if self._settings.global_hotkey != old_hotkey:
+            self._start_hotkey()
 
     def _start_hotkey(self) -> None:
         if self._hotkey_thread is not None:
@@ -1132,44 +1113,7 @@ class AccountManagerWindow(QWidget):
         self._tray_menu.addAction("Quit").triggered.connect(QApplication.quit)
 
     def _tray_login(self, username: str, password: str) -> None:
-        if self._login_worker is not None:
-            self._tray.showMessage(
-                "AccountManager",
-                "A login is already in progress.",
-                QSystemTrayIcon.MessageIcon.Warning,
-                3000,
-            )
-            return
-        worker = LoginWorker(
-            username,
-            password,
-            disconnect_first=self._settings.disconnect_first_default,
-            riot_client_path=self._settings.riot_client_path,
-        )
-        worker.finished_ok.connect(self._on_tray_login_ok)
-        worker.finished_err.connect(self._on_tray_login_err)
-        worker.finished.connect(self._clear_login_worker)
-        self._login_worker = worker
-        worker.start()
-
-    def _on_tray_login_ok(self, username: str) -> None:
-        self.storage.update_last_used(username)
-        add_login(username, game=self._get_account_game(username))
-        self._refresh_list(keep_row=self._selected_row)
-        self._tray.showMessage(
-            "AccountManager",
-            f"Logged in as {username}.",
-            QSystemTrayIcon.MessageIcon.Information,
-            3000,
-        )
-
-    def _on_tray_login_err(self, msg: str) -> None:
-        self._tray.showMessage(
-            "AccountManager",
-            msg,
-            QSystemTrayIcon.MessageIcon.Critical,
-            4000,
-        )
+        self._start_login(username, password, self._settings.disconnect_first_default)
 
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -1204,7 +1148,8 @@ class AccountManagerWindow(QWidget):
 
     def _check_riot_client(self) -> None:
         is_open = bool(win32gui.FindWindow(None, "Riot Client"))
-        if is_open and not self._riot_client_was_open:
+        # During a login the Riot Client is (re)opened on purpose and must keep focus.
+        if is_open and not self._riot_client_was_open and self._login_worker is None:
             self._show_window()
         self._riot_client_was_open = is_open
 
@@ -1253,6 +1198,26 @@ def _input(placeholder: str, *, password: bool = False) -> QLineEdit:
         QLineEdit:focus {{ border-color:{RED}; }}
     """)
     return f
+
+
+def _combo() -> QComboBox:
+    c = QComboBox()
+    c.setFixedHeight(34)
+    c.setStyleSheet(f"""
+        QComboBox {{
+            background:{BG_DARK}; border:1px solid {BORDER};
+            border-radius:5px; padding:0 10px;
+            color:{TEXT}; font-size:13px;
+        }}
+        QComboBox:focus {{ border-color:{RED}; }}
+        QComboBox::drop-down {{ border:none; width:24px; }}
+        QComboBox::down-arrow {{ image:none; width:0; }}
+        QComboBox QAbstractItemView {{
+            background:{BG_DARK}; border:1px solid {BORDER};
+            color:{TEXT}; selection-background-color:{ITEM_SEL};
+        }}
+    """)
+    return c
 
 
 def _icon_btn(text: str) -> QPushButton:

@@ -26,12 +26,12 @@ A lightweight Windows desktop app for switching between Riot Games accounts quic
 
 ## How login works
 
-The app uses **UI automation** to interact with the Riot Client window directly:
+The app uses **Windows UI Automation** to interact with the Riot Client window directly:
 
 1. Finds the Riot Client window by title
-2. Brings it to the foreground
-3. Types your username and password into the sign-in fields
-4. Presses Enter
+2. Finds the username and password fields through the accessibility tree and fills them
+   (no mouse clicks, nothing goes through the clipboard)
+3. Brings the window to the foreground and presses Enter
 
 The Riot Client then handles authentication normally, including hCaptcha and 2FA prompts.
 

@@ -4,8 +4,9 @@ from pathlib import Path
 
 from PyQt6.QtGui import QIcon
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
+from account_storage import StorageError
 from ui.main_window import AccountManagerWindow
 
 ICON_PATH = Path(__file__).parent / "icon.ico"
@@ -41,7 +42,11 @@ def main() -> None:
     icon = QIcon(str(ICON_PATH)) if ICON_PATH.exists() else QIcon()
     app.setWindowIcon(icon)
 
-    window = AccountManagerWindow()
+    try:
+        window = AccountManagerWindow()
+    except StorageError as exc:
+        QMessageBox.critical(None, "AccountManager", str(exc))
+        sys.exit(1)
     window.setWindowIcon(icon)
 
     def _on_new_connection() -> None:

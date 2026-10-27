@@ -15,22 +15,7 @@ from PyQt6.QtWidgets import (
 
 from login_history import clear_history, load_history
 
-BG      = "#1a1a1f"
-BG_DARK = "#14141a"
-BTN     = "#25252d"
-BTN_HV  = "#2f2f39"
-BORDER  = "#2a2a32"
-TEXT    = "#ffffff"
-GRAY4   = "#9ca3af"
-GRAY5   = "#6b7280"
-ITEM    = "#1e1e26"
-
-GAME_PILLS = {
-    "League of Legends": ("#0bc4e3", "LoL"),
-    "Valorant":          ("#ff4655", "VAL"),
-    "TFT":               ("#c69b3a", "TFT"),
-    "Wild Rift":         ("#0ac8b9", "WR"),
-}
+from ui.theme import BG, BORDER, BTN, BTN_HV, GAME_PILLS, GRAY4, GRAY5, ITEM, TEXT
 
 
 def _fmt_ts(iso: str) -> str:

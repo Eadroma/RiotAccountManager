@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+from dataclasses import asdict
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
@@ -22,20 +23,7 @@ def _derive_key(password: str, salt: bytes) -> bytes:
 
 
 def export_accounts(accounts: list[AccountEntry], path: str, password: str) -> None:
-    plaintext = json.dumps(
-        [
-            {
-                "username": a.username,
-                "password": a.password,
-                "note": a.note,
-                "last_used": a.last_used,
-                "game": a.game,
-                "group": a.group,
-            }
-            for a in accounts
-        ],
-        indent=2,
-    ).encode("utf-8")
+    plaintext = json.dumps([asdict(a) for a in accounts], indent=2).encode("utf-8")
 
     salt = os.urandom(16)
     key = _derive_key(password, salt)
@@ -63,14 +51,4 @@ def import_accounts(path: str, password: str) -> list[AccountEntry]:
         raise ValueError("Wrong password or corrupted file.")
 
     items = json.loads(plaintext.decode("utf-8"))
-    return [
-        AccountEntry(
-            username=item["username"],
-            password=item["password"],
-            note=item.get("note", ""),
-            last_used=item.get("last_used", ""),
-            game=item.get("game", ""),
-            group=item.get("group", ""),
-        )
-        for item in items
-    ]
+    return [AccountEntry.from_dict(item) for item in items]

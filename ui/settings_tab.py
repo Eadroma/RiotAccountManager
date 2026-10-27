@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import sys
-
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QKeySequence
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -28,17 +25,7 @@ from settings_storage import (
     set_startup,
 )
 
-# Palette (duplicated here to avoid circular import with main_window)
-BG      = "#1a1a1f"
-BG_DARK = "#14141a"
-BTN     = "#25252d"
-BTN_HV  = "#2f2f39"
-RED     = "#D13639"
-GOLD    = "#C89B3C"
-BORDER  = "#2a2a32"
-TEXT    = "#ffffff"
-GRAY4   = "#9ca3af"
-GRAY5   = "#6b7280"
+from ui.theme import BG, BG_DARK, BORDER, BTN, BTN_HV, GOLD, GRAY4, GRAY5, RED, TEXT
 
 
 class HotkeyCaptureField(QLineEdit):
@@ -171,6 +158,7 @@ def _btn(text: str) -> QPushButton:
 
 class SettingsTab(QWidget):
     settings_changed = pyqtSignal()
+    accounts_changed = pyqtSignal()
 
     def __init__(self, s: AppSettings, storage: AccountStorage, parent=None) -> None:
         super().__init__(parent)
@@ -234,9 +222,12 @@ class SettingsTab(QWidget):
         form.addSpacing(6)
         self._auto_min_chk        = _chk("Auto-minimize after login")
         self._disconnect_def_chk  = _chk("Default: Disconnect current account first")
+        self._launch_game_chk     = _chk("Start the account's game after login")
         form.addWidget(self._auto_min_chk)
         form.addSpacing(4)
         form.addWidget(self._disconnect_def_chk)
+        form.addSpacing(4)
+        form.addWidget(self._launch_game_chk)
 
         form.addSpacing(14)
 
@@ -303,7 +294,8 @@ class SettingsTab(QWidget):
         self._quit_radio.toggled.connect(self._emit)
         self._auto_min_chk.toggled.connect(self._emit)
         self._disconnect_def_chk.toggled.connect(self._emit)
-        self._path_field.textChanged.connect(self._emit)
+        self._launch_game_chk.toggled.connect(self._emit)
+        self._path_field.editingFinished.connect(self._emit)
         self._hotkey_field.hotkey_changed.connect(self._emit)
 
     def populate(self, s: AppSettings) -> None:
@@ -314,6 +306,7 @@ class SettingsTab(QWidget):
         self._quit_radio.setChecked(not s.minimize_to_tray_on_close)
         self._auto_min_chk.setChecked(s.auto_minimize_after_login)
         self._disconnect_def_chk.setChecked(s.disconnect_first_default)
+        self._launch_game_chk.setChecked(s.launch_game_after_login)
         self._hotkey_field.set_hotkey(s.global_hotkey)
 
     def collect(self) -> AppSettings:
@@ -324,6 +317,7 @@ class SettingsTab(QWidget):
             minimize_to_tray_on_close=self._tray_radio.isChecked(),
             auto_minimize_after_login=self._auto_min_chk.isChecked(),
             disconnect_first_default=self._disconnect_def_chk.isChecked(),
+            launch_game_after_login=self._launch_game_chk.isChecked(),
             global_hotkey=self._hotkey_field._hotkey,
         )
 
@@ -338,6 +332,7 @@ class SettingsTab(QWidget):
         if path:
             self._path_field.setText(path)
             self._path_status.setText("")
+            self._emit()
 
     def _on_detect(self) -> None:
         path = auto_detect_riot_client()
@@ -347,6 +342,7 @@ class SettingsTab(QWidget):
                 f"color:{GOLD}; font-size:11px; background:transparent;"
             )
             self._path_status.setText(f"Detected: {path}")
+            self._emit()
         else:
             self._path_status.setStyleSheet(
                 "color:#f87171; font-size:11px; background:transparent;"
@@ -355,7 +351,7 @@ class SettingsTab(QWidget):
 
     def _on_startup_toggled(self, checked: bool) -> None:
         try:
-            set_startup(checked, sys.executable)
+            set_startup(checked)
         except OSError as exc:
             self._startup_chk.blockSignals(True)
             self._startup_chk.setChecked(not checked)
@@ -409,10 +405,10 @@ class SettingsTab(QWidget):
         try:
             accounts = import_accounts(path, pw)
             for a in accounts:
-                self._storage.add_or_update(a.username, a.password, a.note, a.game)
+                self._storage.add_or_update(a)
             self._data_status.setStyleSheet(f"color:{GOLD}; font-size:11px; background:transparent;")
             self._data_status.setText(f"Imported {len(accounts)} account(s).")
-            self.settings_changed.emit()
+            self.accounts_changed.emit()
         except ValueError as exc:
             self._data_status.setStyleSheet("color:#f87171; font-size:11px; background:transparent;")
             self._data_status.setText(str(exc))
