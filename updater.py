@@ -33,6 +33,12 @@ class UpdateChecker(QThread):
 
 def _version_gt(a: str, b: str) -> bool:
     try:
-        return tuple(int(x) for x in a.split(".")) > tuple(int(x) for x in b.split("."))
+        return _version_key(a) > _version_key(b)
     except ValueError:
         return False
+
+
+def _version_key(v: str) -> tuple[tuple[int, ...], bool]:
+    # "3.4.0-beta" -> ((3, 4, 0), False): a prerelease sorts before its final release.
+    base, sep, _pre = v.partition("-")
+    return tuple(int(x) for x in base.split(".")), not sep
