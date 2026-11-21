@@ -27,6 +27,8 @@ from settings_storage import (
 
 from ui.theme import BG, BG_DARK, BORDER, BTN, BTN_HV, GOLD, GRAY4, GRAY5, RED, TEXT
 
+EXPORT_PASSWORD_MIN_LEN = 8
+
 
 class HotkeyCaptureField(QLineEdit):
     hotkey_changed = pyqtSignal(str)
@@ -376,6 +378,12 @@ class SettingsTab(QWidget):
             self._data_status.setStyleSheet("color:#f87171; font-size:11px; background:transparent;")
             self._data_status.setText("Export cancelled — password is required.")
             return
+        if len(pw) < EXPORT_PASSWORD_MIN_LEN:
+            self._data_status.setStyleSheet("color:#f87171; font-size:11px; background:transparent;")
+            self._data_status.setText(
+                f"Export cancelled — password must be at least {EXPORT_PASSWORD_MIN_LEN} characters."
+            )
+            return
         pw2, ok2 = QInputDialog.getText(
             self, "Export — confirm password", "Confirm password:", QLineEdit.EchoMode.Password
         )
@@ -404,8 +412,17 @@ class SettingsTab(QWidget):
             return
         try:
             accounts = import_accounts(path, pw)
+            # Merge in memory and save once, so a failure leaves accounts.json untouched.
+            merged = self._storage.load_accounts()
             for a in accounts:
-                self._storage.add_or_update(a)
+                for i, existing in enumerate(merged):
+                    if existing.username.lower() == a.username.lower():
+                        a.last_used = a.last_used or existing.last_used
+                        merged[i] = a
+                        break
+                else:
+                    merged.append(a)
+            self._storage.save_accounts(merged)
             self._data_status.setStyleSheet(f"color:{GOLD}; font-size:11px; background:transparent;")
             self._data_status.setText(f"Imported {len(accounts)} account(s).")
             self.accounts_changed.emit()
