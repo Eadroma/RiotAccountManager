@@ -76,5 +76,41 @@ class StorageErrorInUiTests(unittest.TestCase):
         win._notify.assert_called_once_with("disk says no", error=True, auto_hide=False)
 
 
+class PasswordSpacesTests(unittest.TestCase):
+    def _win(self, username, password):
+        win = mock.MagicMock()
+        win.username_field.text.return_value = username
+        win.password_field.text.return_value = password
+        win.note_field.text.return_value = "  note  "
+        win.group_combo.currentData.return_value = ""
+        win.game_combo.currentText.return_value = "Valorant"
+        win.storage.load_accounts.return_value = []
+        win._selected_acc_idx.return_value = -1
+        return win
+
+    def test_save_keeps_password_spaces_and_strips_username(self):
+        win = self._win("  user  ", " abc ")
+        AccountManagerWindow._save_account(win)
+        saved = win.storage.save_accounts.call_args.args[0]
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].username, "user")
+        self.assertEqual(saved[0].password, " abc ")
+        self.assertEqual(saved[0].note, "note")
+
+    def test_login_keeps_password_spaces_and_strips_username(self):
+        win = self._win("  user  ", " abc ")
+        AccountManagerWindow._login_account(win)
+        win._start_login.assert_called_once_with("user", " abc ", win.disconnect_chk.isChecked())
+
+    def test_blank_password_refused(self):
+        for password in ("", "   "):
+            win = self._win("user", password)
+            AccountManagerWindow._save_account(win)
+            win.storage.save_accounts.assert_not_called()
+            win._set_status.assert_called_once_with("Username and password are required.", error=True)
+            AccountManagerWindow._login_account(win)
+            win._start_login.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

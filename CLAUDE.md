@@ -89,7 +89,6 @@ Bump `version.py` before tagging, because the in-app update check compares again
 
 ## Known issues (not yet fixed)
 
-1. Passwords are `.strip()`ped on save/login, so leading/trailing spaces are lost.
-2. README claims no external requests, but `updater.py` calls GitHub.
-3. `GlobalHotkeyThread.stop_thread` does nothing if called before the thread stored its id, and
+1. README claims no external requests, but `updater.py` calls GitHub.
+2. `GlobalHotkeyThread.stop_thread` does nothing if called before the thread stored its id, and
    `_start_hotkey` then waits forever. Rare now that the hotkey restarts only when it changes.
