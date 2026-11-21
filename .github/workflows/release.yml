@@ -25,18 +25,28 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pyinstaller
+          pip install "pyinstaller>=6,<7"
+
+      - name: Check tag matches version.py
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $v = python -c "from version import VERSION; print(VERSION)"
+          if ($env:TAG -ne "v$v") { Write-Error "Tag $env:TAG != version.py v$v"; exit 1 }
 
       - name: Run tests
         run: python -m unittest discover -s tests -t .
 
       - name: Build executable
+        run: pyinstaller --noconfirm AccountManager.spec
+
+      - name: SHA-256 checksum
+        id: sha
         run: |
-          pyinstaller --noconfirm --onefile --windowed `
-            --icon=icon.ico `
-            --name=AccountManager `
-            --add-data "icon.ico;." `
-            main.py
+          $h = (Get-FileHash dist/AccountManager.exe -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("dist/SHA256SUMS.txt", "$h  AccountManager.exe`n")
+          "hash=$h" >> $env:GITHUB_OUTPUT
 
       # ── Rolling "latest" release (every master push) ──────────────────
       - name: Delete existing latest release
@@ -53,7 +63,9 @@ jobs:
           tag_name: latest
           name: Latest Build
           prerelease: true
-          files: dist/AccountManager.exe
+          files: |
+            dist/AccountManager.exe
+            dist/SHA256SUMS.txt
           body: |
             ## Latest build
 
@@ -68,9 +80,13 @@ jobs:
 
             > Windows Defender may warn on first run — click **More info → Run anyway**.
 
+            SHA-256 (`AccountManager.exe`): `${{ steps.sha.outputs.hash }}`
+
       # ── Versioned release (on v*.*.* tag) ────────────────────────────
       - name: Upload exe to versioned release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/AccountManager.exe
+          files: |
+            dist/AccountManager.exe
+            dist/SHA256SUMS.txt

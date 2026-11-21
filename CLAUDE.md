@@ -12,7 +12,7 @@ Single user, single machine. Version lives in `version.py`. The user mainly runs
 pip install -r requirements.txt
 python main.py                 # add --minimized to start in tray
 python -m unittest discover -s tests -t .
-pyinstaller --noconfirm --onefile --windowed --icon=icon.ico --name=AccountManager --add-data "icon.ico;." main.py
+pyinstaller --noconfirm AccountManager.spec
 ```
 
 Only one instance runs at a time: a second launch just raises the first and exits. Stop a running
@@ -22,9 +22,11 @@ For a UI check without touching real data, run with `QT_QPA_PLATFORM=offscreen` 
 `AccountStorage`, `login_history.add_login`, `UpdateChecker.start`, `GlobalHotkeyThread.start`
 and `LoginWorker`.
 
-CI (`.github/workflows/release.yml`): runs the tests, then every push to `master` rebuilds the exe
-and replaces the `latest` prerelease; a `v*.*.*` tag attaches the exe to that versioned release.
-Bump `version.py` before tagging, because the in-app update check compares against it.
+CI: `.github/workflows/tests.yml` runs the tests on every pull request. `.github/workflows/release.yml`
+runs the tests, builds from `AccountManager.spec` (UPX off), then every push to `master` replaces the
+`latest` prerelease; a `v*.*.*` tag attaches the exe to that versioned release. Both get
+`SHA256SUMS.txt`. A tag that differs from `version.py` fails before publishing, so bump `version.py`
+before tagging (the in-app update check compares against it too).
 
 ## Layout
 

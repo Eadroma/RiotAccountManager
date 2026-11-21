@@ -9,6 +9,7 @@ venv/
 build/
 dist/
 *.spec
+!AccountManager.spec
 
 # OS
 .DS_Store

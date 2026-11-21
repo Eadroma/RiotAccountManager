@@ -1,5 +1,5 @@
-PyQt6>=6.0
-cryptography>=41.0
-keyring>=24.0
-pywinauto>=0.6
-pywin32>=306
+PyQt6>=6.0,<7
+cryptography>=41.0,<47
+keyring>=24.0,<26
+pywinauto>=0.6,<0.7
+pywin32>=306,<312
