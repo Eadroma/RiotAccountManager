@@ -45,6 +45,7 @@ Bump `version.py` before tagging, because the in-app update check compares again
 | `ui/settings_tab.py`, `ui/history_tab.py` | The other two tabs |
 | `ui/theme.py` | Palette, `GAMES`, `GAME_PILLS`, `GROUP_COLORS` |
 | `tests/test_core.py` | Storage, export/import and hotkey parsing tests (stdlib `unittest`) |
+| `tests/test_riot_ui_login.py` | Sign-in form detection and Enter guard, with mocked UIA controls |
 
 ## Things to know before editing
 
@@ -64,8 +65,10 @@ Bump `version.py` before tagging, because the in-app update check compares again
 - An unhandled exception inside a Qt slot aborts the whole app under PyQt6. Keep slot code safe.
 - Passwords must never be logged, shown in errors or written unencrypted.
 - Riot Client window is found by exact title `"Riot Client"`. The sign-in inputs are found through
-  UI Automation (pywinauto `uia` backend): the form must have exactly 2 `Edit` controls
-  (username, password), filled with `ValuePattern.SetValue` and read back to confirm (the
+  UI Automation (pywinauto `uia` backend): among the `Edit` controls, the password is picked by
+  the UIA `IsPassword` property and the username is the only other one; any other form (not
+  exactly 1 text + 1 password field) is refused with `RiotUIError` once the wait times out. Fields are
+  filled with `ValuePattern.SetValue` and read back to confirm (the
   password only reports bullets, so its length is compared), then Enter is sent only if the Riot
   window has focus. No mouse positions, no clipboard. Chromium builds the accessibility tree
   lazily, so the first query can return nothing (hence the retry loop), and the window must not

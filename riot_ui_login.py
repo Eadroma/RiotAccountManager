@@ -45,6 +45,11 @@ def _bring_to_front_reliable(hwnd: int, retries: int = 3) -> None:
     raise RiotUIError("Could not bring Riot Client to foreground.")
 
 
+def _is_password(edit) -> bool:
+    """UIA IsPassword property of an edit control."""
+    return bool(edit.element_info.element.CurrentIsPassword)
+
+
 def _form_fields(hwnd: int):
     """Return the (username, password) UIA edit controls of the sign-in form."""
     # Runs in LoginWorker threads: use the MTA so the UIA object pywinauto
@@ -60,8 +65,12 @@ def _form_fields(hwnd: int):
     while True:
         # Chromium builds its accessibility tree lazily after the first query.
         edits = window.descendants(control_type="Edit")
-        if len(edits) == 2:
-            return edits[0], edits[1]
+        passwords, texts = [], []
+        for edit in edits:
+            (passwords if _is_password(edit) else texts).append(edit)
+        # Refuse any unexpected form rather than typing into the wrong field.
+        if len(passwords) == 1 and len(texts) == 1:
+            return texts[0], passwords[0]
         if time.monotonic() >= deadline:
             raise RiotUIError(
                 "Sign-in fields not found. Make sure the Riot Client shows the "
