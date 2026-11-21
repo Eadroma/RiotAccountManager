@@ -41,6 +41,10 @@ The Riot Client then handles authentication normally, including hCaptcha and 2FA
 - Python 3.10+
 - Riot Client installed and open on the sign-in screen when clicking Login
 
+## Verify the download
+
+Each release ships `SHA256SUMS.txt`. In PowerShell, `(Get-FileHash .\AccountManager.exe -Algorithm SHA256).Hash.ToLower()` must print the same hash.
+
 ## Installation
 
 ```powershell
@@ -58,7 +62,7 @@ python main.py
 
 ```powershell
 pip install pyinstaller
-pyinstaller --noconfirm --onefile --windowed --icon=icon.ico --name=AccountManager --add-data "icon.ico;." main.py
+pyinstaller --noconfirm AccountManager.spec
 ```
 
 Output: `dist\AccountManager.exe` — no Python installation required on the target machine.
