@@ -6,7 +6,7 @@ class AccountEntry:
     """Holds a single account's credentials in plaintext."""
 
     username: str
-    password: str
+    password: str = field(repr=False)  # keep it out of tracebacks and logs
     note: str = field(default="")
     last_used: str = field(default="")  # ISO 8601, e.g. "2026-04-13T14:23:00"
     game: str = field(default="")

@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from account_storage import AccountStorage
+from account_storage import AccountStorage, StorageError
 from models import AccountEntry
 from global_hotkey import GlobalHotkeyThread
 from login_history import add_login
@@ -345,7 +345,7 @@ class AccountManagerWindow(QWidget):
 
         self._settings_tab = SettingsTab(self._settings, self.storage)
         self._settings_tab.settings_changed.connect(self._on_settings_changed)
-        self._settings_tab.accounts_changed.connect(lambda: self._refresh_list(self._selected_acc_idx()))
+        self._settings_tab.accounts_changed.connect(self._on_accounts_changed)
         self._tabs.addTab(self._settings_tab, "Settings")
 
         self._history_tab = HistoryTab()
@@ -636,6 +636,12 @@ class AccountManagerWindow(QWidget):
         if hasattr(self, "_tray_menu"):
             self._rebuild_tray_menu()
 
+    def _on_accounts_changed(self) -> None:
+        try:
+            self._refresh_list(self._selected_acc_idx())
+        except StorageError as exc:
+            self._storage_failed(exc)
+
     def _selected_acc_idx(self) -> int:
         """Account index (position in storage) of the selected row, or -1."""
         if 0 <= self._selected_row < len(self._item_widgets):
@@ -802,7 +808,11 @@ class AccountManagerWindow(QWidget):
         return last.y() + last.height()
 
     def _perform_drop(self, dragged_acc_idx: int, insert_before: int, new_group: str) -> None:
-        accounts = self.storage.load_accounts()
+        try:
+            accounts = self.storage.load_accounts()
+        except StorageError as exc:
+            self._storage_failed(exc)
+            return
         dragged = accounts[dragged_acc_idx]
         dragged.group = new_group
         accounts.pop(dragged_acc_idx)
@@ -814,8 +824,11 @@ class AccountManagerWindow(QWidget):
                 insert_before -= 1
             accounts.insert(insert_before, dragged)
             new_idx = insert_before
-        self.storage.save_accounts(accounts)
-        self._refresh_list(keep_acc=new_idx)
+        try:
+            self.storage.save_accounts(accounts)
+            self._refresh_list(keep_acc=new_idx)
+        except StorageError as exc:
+            self._storage_failed(exc)
 
     def _rebuild_group_combo(self) -> None:
         prev = self.group_combo.currentData()
@@ -857,7 +870,11 @@ class AccountManagerWindow(QWidget):
         acc_idx = self._selected_acc_idx()
         if acc_idx < 0:
             return
-        accounts = self.storage.load_accounts()
+        try:
+            accounts = self.storage.load_accounts()
+        except StorageError as exc:
+            self._storage_failed(exc)
+            return
         group = accounts[acc_idx].group
         # The list is shown grouped, so swap with the nearest account of the same group.
         stop = -1 if step < 0 else len(accounts)
@@ -865,8 +882,11 @@ class AccountManagerWindow(QWidget):
         if other is None:
             return
         accounts[acc_idx], accounts[other] = accounts[other], accounts[acc_idx]
-        self.storage.save_accounts(accounts)
-        self._refresh_list(keep_acc=other)
+        try:
+            self.storage.save_accounts(accounts)
+            self._refresh_list(keep_acc=other)
+        except StorageError as exc:
+            self._storage_failed(exc)
 
     def _save_account(self) -> None:
         username = self.username_field.text().strip()
@@ -878,7 +898,11 @@ class AccountManagerWindow(QWidget):
         if not username or not password:
             self._set_status("Username and password are required.", error=True)
             return
-        accounts = self.storage.load_accounts()
+        try:
+            accounts = self.storage.load_accounts()
+        except StorageError as exc:
+            self._storage_failed(exc)
+            return
         selected = self._selected_acc_idx()
         same_name = next(
             (i for i, a in enumerate(accounts) if a.username.lower() == username.lower()), -1
@@ -895,8 +919,12 @@ class AccountManagerWindow(QWidget):
         else:
             accounts.append(entry)
             acc_idx = len(accounts) - 1
-        self.storage.save_accounts(accounts)
-        self._refresh_list(keep_acc=acc_idx)
+        try:
+            self.storage.save_accounts(accounts)
+            self._refresh_list(keep_acc=acc_idx)
+        except StorageError as exc:
+            self._storage_failed(exc)
+            return
         self._set_status(f"Account '{username}' saved.")
 
     def _remove_account(self) -> None:
@@ -909,9 +937,13 @@ class AccountManagerWindow(QWidget):
         answer = QMessageBox.question(self, "Remove account", f"Remove '{username}'?")
         if answer != QMessageBox.StandardButton.Yes:
             return
-        self.storage.remove(username)
         keep = max(0, acc_idx - 1) if len(self.accounts) > 1 else -1
-        self._refresh_list(keep_acc=keep)
+        try:
+            self.storage.remove(username)
+            self._refresh_list(keep_acc=keep)
+        except StorageError as exc:
+            self._storage_failed(exc)
+            return
         self._clear_form()
         self._set_status(f"Account '{username}' removed.")
 
@@ -956,9 +988,13 @@ class AccountManagerWindow(QWidget):
 
     def _on_login_ok(self, username: str) -> None:
         game = self._get_account_game(username)
-        self.storage.update_last_used(username)
-        add_login(username, game=game)
-        self._refresh_list(keep_acc=self._selected_acc_idx())
+        try:
+            self.storage.update_last_used(username)
+            add_login(username, game=game)
+            self._refresh_list(keep_acc=self._selected_acc_idx())
+        except StorageError as exc:
+            self._storage_failed(exc)
+            return
         self._set_status(f"Credentials sent for '{username}'.")
         tray_msg = f"Logged in as {username}" + (f"  ·  {game}" if game else "")
         self._tray.showMessage("AccountManager", tray_msg, QSystemTrayIcon.MessageIcon.Information, 3000)
@@ -967,6 +1003,10 @@ class AccountManagerWindow(QWidget):
 
     def _on_login_err(self, msg: str) -> None:
         self._notify(msg, error=True, auto_hide=False)
+
+    def _storage_failed(self, exc: StorageError) -> None:
+        """Show a storage error instead of letting it abort the app; nothing is saved."""
+        self._notify(str(exc), error=True, auto_hide=False)
 
     def _notify(self, msg: str, *, error: bool = False, auto_hide: bool = True) -> None:
         """Status line in the window, plus a tray balloon when the window is hidden."""
