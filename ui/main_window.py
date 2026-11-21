@@ -890,12 +890,12 @@ class AccountManagerWindow(QWidget):
 
     def _save_account(self) -> None:
         username = self.username_field.text().strip()
-        password = self.password_field.text().strip()
+        password = self.password_field.text()  # spaces are part of the password
         note     = self.note_field.text().strip()
         group    = self.group_combo.currentData() or ""
         if group == "__new__":
             group = ""
-        if not username or not password:
+        if not username or not password.strip():
             self._set_status("Username and password are required.", error=True)
             return
         try:
@@ -949,8 +949,8 @@ class AccountManagerWindow(QWidget):
 
     def _login_account(self) -> None:
         username = self.username_field.text().strip()
-        password = self.password_field.text().strip()
-        if not username or not password:
+        password = self.password_field.text()  # spaces are part of the password
+        if not username or not password.strip():
             self._set_status("Select an account or enter credentials first.", error=True)
             return
         self._start_login(username, password, self.disconnect_chk.isChecked())
